@@ -12,15 +12,22 @@ Kiến trúc pipeline đầy đủ, nguyên tắc thiết kế và lộ trình t
 checkpoint được mô tả chi tiết tại
 [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
-## Trạng thái hiện tại — Checkpoint 0: Project skeleton
+## Trạng thái hiện tại — Checkpoint 1: Download video
 
-Đây **chỉ** là bộ khung project. Chưa có logic download, transcription,
-translation, TTS hay xử lý video/audio nào được implement. CLI hiện chỉ
-hiển thị `--help`.
+Đã có:
+
+- Project skeleton (Checkpoint 0).
+- Subcommand `download`: tải một video YouTube (yt-dlp), tạo
+  `metadata.json` + `source.mp4` trong một thư mục episode riêng.
+
+Chưa có: transcription, translation, TTS, timing normalization,
+render, pipeline end-to-end, playlist.
 
 ## Yêu cầu
 
 - Python 3.11 trở lên.
+- `ffmpeg` cài sẵn trên máy nếu sau này cần merge audio+video khi tải
+  (chưa bắt buộc ở checkpoint này, nhưng yt-dlp sẽ cần tới).
 
 ## Cài đặt (development)
 
@@ -30,13 +37,22 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-Không có dependency bên ngoài nào ở bước skeleton này.
+Dependency hiện tại: `yt-dlp` (dùng cho subcommand `download`).
 
 ## Sử dụng
 
 ```bash
 python -m app --help
+
+# Tải một video, lưu vào ./output/<video_id>__<title>/
+python -m app download "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# Chỉ định thư mục workspace khác + ép tải lại dù đã có source.mp4
+python -m app download "URL" --workspace ./output --force
 ```
+
+Chạy lại lệnh `download` với cùng URL sẽ **không tải lại** nếu
+`source.mp4` đã tồn tại trong thư mục episode (hỗ trợ resume).
 
 ## Chạy test
 
@@ -50,9 +66,9 @@ python -m unittest discover -s tests
 youtube-vietnamese-dubber/
 ├── app/                  # Source code chính (package "app")
 │   ├── __main__.py       # Cho phép chạy `python -m app`
-│   ├── cli.py            # CLI (argparse); hiện chỉ có --help/--version
-│   ├── youtube/          # Stage: metadata & download video/playlist (yt-dlp)
-│   │   └── download.py
+│   ├── cli.py            # CLI (argparse); --help/--version + subcommand download
+│   ├── youtube/          # Stage: metadata & download video (yt-dlp)
+│   │   └── download.py   # download_video(): metadata.json + source.mp4, có resume
 │   ├── audio/            # Stage: xử lý audio/video (FFmpeg)
 │   ├── transcription/    # Stage: speech-to-text (faster-whisper)
 │   ├── translation/      # Stage: dịch thuật (adapter Ollama/OpenAI/manual)

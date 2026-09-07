@@ -5,7 +5,9 @@ description = "Công cụ local tạo bản thuyết minh tiếng Việt cho vid
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
-dependencies = []
+dependencies = [
+    "yt-dlp>=2024.12.0",
+]
 
 [build-system]
 requires = ["hatchling"]
