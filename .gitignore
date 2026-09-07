@@ -1,0 +1,46 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+.Python
+build/
+dist/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Environment variables / secrets ---
+.env
+
+# --- Testing / coverage ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Project runtime data ---
+# Không commit video/audio/model AI. Giữ lại thư mục nhưng bỏ qua nội dung.
+output/*
+!output/.gitkeep
+temp/*
+!temp/.gitkeep
+
+# Config cá nhân (nếu sau này thêm config.yaml theo config.example.yaml)
+config.yaml
+
+# Log files
+*.log
