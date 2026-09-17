@@ -84,27 +84,27 @@ Ba cái bẫy đã mất thời gian vì nó:
 
 ---
 
-## Cách giao việc khi chạy nhiều agent
+## Cách giao việc (mục tiêu: tiết kiệm token)
 
-- Opus lên plan và review; Sonnet implement.
-- **Một agent mỗi checkpoint, không chạy song song** — các checkpoint ăn
-  output của nhau (CP4 đọc `translated.json` do CP3 sinh ra), chạy song
-  song thì hai agent phải đoán schema của nhau.
-- Sonnet **tự sửa lỗi triển khai**. Chỉ escalate lên Opus khi là quyết
-  định thiết kế: đổi schema artifact, đổi contract giữa các stage, hoặc
-  trade-off chất lượng/chi phí.
-- Spec giao việc **phải kèm yêu cầu chạy thật** ở mục 1 — subagent khởi
-  động cold, không tự biết bài học đó.
+| Cỡ việc | Cách làm |
+|---|---|
+| Checkpoint (nhiều file + test + chạy thật) | `/spec N` → user duyệt `docs/specs/cp-N.md` → `/implement N` → `/clear` |
+| Fix bug nhỏ, sửa docs, trả lời câu hỏi | Làm trực tiếp, **không** tạo subagent |
+
+- Opus chỉ thiết kế (spec) và review; subagent `implementer` (Sonnet) viết
+  code. Luật của Sonnet nằm ở `.claude/agents/implementer.md` — spec không
+  lặp lại.
+- Quyết định nhỏ khi triển khai ghi ở `docs/decisions/checkpoint-N.md`;
+  mục A là contract cho checkpoint sau.
+- Một agent mỗi checkpoint, không chạy song song — checkpoint sau ăn output
+  của checkpoint trước.
+- Không đọc cả `docs/IMPLEMENTATION_PLAN.md` — chỉ mục đang cần (offset/limit).
 
 ---
 
 ## Việc tiếp theo
 
-**Checkpoint 3 — Translation**: abstraction `Translator` +
-`OllamaTranslator`, batch 20–30 segment, structured JSON output, validate
-ID (đủ, không trùng, không mất segment), retry theo từng batch lỗi, lưu
-tiến trình incremental để resume.
-
-Nên gộp luôn **config loader** vào checkpoint này: `app/config.py` chưa
-tồn tại dù nằm trong danh mục công việc của CP0, mà plan §10 yêu cầu
-không được hard-code provider/model.
+**Checkpoint 4 — Edge TTS**: `tts/base.py` + `tts/edge.py`, sinh
+`tts/000001.mp3`… từ `translated.json`; resume, retry, cache, config voice
+và speaking rate. Đọc trước mục A của `docs/decisions/checkpoint-3.md`
+(`translated_text` có thể rỗng).
