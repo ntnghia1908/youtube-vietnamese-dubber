@@ -76,6 +76,72 @@ ollama list                # phai thay qwen3:8b trong danh sach
 nvidia-smi            # xem GPU va phien ban driver/CUDA
 ```
 
+Có driver + GPU vẫn **chưa đủ** — `ctranslate2` cần thêm cuBLAS 12.x và
+cuDNN 9 (đúng tên file dll, vd `cublas64_12.dll`, `cudnn64_9.dll`), nếu
+thiếu sẽ lỗi lúc chạy `transcribe --device cuda` (xem bảng lỗi thường gặp
+bên dưới).
+
+**Cách A — qua conda (khuyến nghị nếu máy có Anaconda/Miniconda):**
+Đơn giản và không dính bẫy "trang tải mặc định giờ ra bản 13.x" ở Cách B.
+
+```bash
+conda install nvidia::cudnn cuda-version=12
+```
+
+Lệnh này kéo theo `libcublas` bản 12.x cùng lúc nhờ ràng buộc
+`cuda-version=12`. DLL nằm ở `<đường dẫn conda>\Library\bin` (vd
+`C:\Users\<user>\miniconda3\Library\bin`) — thư mục này thường đã có sẵn
+trong PATH của user nếu cài conda có tick "Add to PATH", **không cần**
+CUDA Toolkit cài riêng nữa. Kiểm chứng:
+
+```bash
+dir "<đường dẫn conda>\Library\bin\cublas64_12.dll"
+dir "<đường dẫn conda>\Library\bin\cudnn64_9.dll"
+```
+
+**Cách B — CUDA Toolkit + cuDNN cài tay (máy không có conda):**
+
+1. Nếu `nvidia-smi` đã báo CUDA version ≥ 12.x thì driver đủ mới, **không
+   cần** tick cài lại driver ở bước sau.
+2. Tải tại <https://developer.nvidia.com/cuda-toolkit-archive> (dùng
+   trang **Archive**, không phải trang tải chính — trang chính giờ mặc
+   định trỏ tới bản **13.x** mà `ctranslate2` 4.x chưa hỗ trợ). Chọn một
+   bản **12.x** cụ thể (vd 12.6.3 hoặc 12.8.1) → Windows → x86_64 → 11 →
+   exe (local). (`x86_64` chính là kiến trúc `AMD64` mà Windows báo qua
+   `$env:PROCESSOR_ARCHITECTURE`; mục chọn hệ điều hành trên trang này
+   chọn **`11`** cho Windows 11 thường, không phải `Server 2022`.)
+3. Chạy installer → **Custom (Advanced)** → bỏ tick **"Driver
+   components"** nếu driver hiện tại đã mới hơn → chỉ giữ CUDA Toolkit
+   (Runtime + Development). Cài bản 12.x không đụng tới CUDA khác đã có —
+   mỗi bản nằm trong thư mục `CUDA\vXX.X\` riêng.
+4. **Mở terminal mới** (PATH chỉ áp dụng cho terminal mở sau khi cài) rồi
+   kiểm chứng:
+
+```bash
+nvcc --version
+dir "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.x\bin\x64\cublas64_12.dll"
+```
+
+5. Vào <https://developer.nvidia.com/cudnn> (cần đăng nhập tài khoản
+   NVIDIA Developer, miễn phí) → chọn **cuDNN 9.x for CUDA 12.x,
+   Windows** → tải bản **zip** (không phải installer .exe).
+6. Giải nén, copy đè vào đúng thư mục CUDA Toolkit **v12.x** vừa cài
+   (gộp chung, không cài vào chỗ riêng):
+   - `bin\*.dll` → `...\CUDA\v12.x\bin` (hoặc `bin\x64` nếu bản 12.x mới
+     dùng cấu trúc thư mục tách theo kiến trúc)
+   - `include\*.h` → `...\CUDA\v12.x\include`
+   - `lib\x64\*.lib` → `...\CUDA\v12.x\lib\x64`
+7. Mở terminal mới, kiểm chứng file `cudnn64_9.dll` tồn tại trong thư mục
+   bin vừa copy.
+
+**Kiểm chứng cuối cùng (áp dụng cho cả hai cách)** — bằng chính pipeline,
+không chỉ nhìn dll tồn tại:
+
+```bash
+.venv/Scripts/python.exe -m app transcribe "<episode_dir>" \
+    --whisper-model tiny --source-lang en --device cuda --force
+```
+
 Không có GPU vẫn chạy được, chỉ chậm hơn — xem mục B4.
 
 ---
@@ -174,7 +240,7 @@ của Whisper từng nhận nhầm một video tiếng Trung thành `en` (confid
 | `Output file does not contain any stream` | `source.mp4` không có audio track. Tải lại bằng `--force` |
 | `UnicodeEncodeError` khi in tiếng Việt/tiếng Trung | Console Windows dùng cp1252. Đặt `PYTHONIOENCODING=utf-8`. Chạy qua `python -m app` thì không bị |
 | `ModuleNotFoundError: faster_whisper` | Đang dùng `python` trần thay vì python trong `.venv` |
-| Lỗi cuDNN/CUDA khi `--device cuda` | Thiếu CUDA 12.x hoặc cuDNN 9. Tạm dùng `--device cpu` |
+| Lỗi cuDNN/CUDA khi `--device cuda` (vd `cublas64_12.dll is not found`) | Thiếu CUDA Toolkit 12.x hoặc cuDNN 9 — có driver/GPU không có nghĩa là đã có hai thứ này. Cài theo mục A5. Tạm thời dùng `--device cpu` trong lúc chờ cài |
 
 ---
 
