@@ -144,7 +144,15 @@ Chi phí xấu nhất: một segment "không dịch nổi" trong batch 25 đi qu
 tầng lỗi (25→13→7→4→2→1), mỗi tầng 3 lần thử, cộng 5 nửa thành công ≈
 **23 lần gọi model** (~15 phút với batch lớn) trước khi dừng.
 
-### C3. [CẦN DUYỆT] Một segment lỗi hẳn → dừng cả stage
+### C3. [ĐÃ CHỐT 2026-09-17 — CHƯA IMPLEMENT] Một segment lỗi hẳn → dừng cả stage
+
+> **Chốt:** user cần chạy cả playlist → **không dừng stage**. Segment lỗi
+> sau khi chia đôi tới 1 dòng thì đánh dấu lỗi, dịch tiếp phần còn lại.
+> Cuối cùng vẫn ghi `translated.json`: segment lỗi có `translated_text: ""`,
+> thêm key top-level `failed_ids: [..]` (rỗng nếu không lỗi), in cảnh báo
+> kèm danh sách ID. Chạy lại **không** `--force` mà `failed_ids` khác rỗng
+> → chỉ dịch lại các ID đó (không SKIP). CP4 đã bỏ qua `translated_text`
+> rỗng (A2) nên không phải xử lý gì thêm. Đổi schema → cập nhật A1.
 
 Hiện tại: một segment đơn lẻ vẫn lỗi sau 3 lần → dừng stage, tiến trình
 đã lưu, chạy lại sẽ thử tiếp.
@@ -166,7 +174,13 @@ CP8 (playlist).**
 - Resume chia batch lại trên **các segment còn thiếu**, nên số batch và
   ranh giới batch lần chạy sau có thể khác lần đầu.
 
-### C5. [CẦN DUYỆT] Đổi model giữa chừng không làm mất partial
+### C5. [ĐÃ CHỐT 2026-09-17 — CHƯA IMPLEMENT] Đổi model giữa chừng không làm mất partial
+
+> **Chốt** (user: chọn cách tiện cho user): lưu `model` vào partial. Model
+> khác → in log rõ ràng ("partial dịch bằng A, đang dùng B — dịch lại từ
+> đầu") rồi bỏ partial. Lý do: một `translated.json` không được trộn hai
+> model, và key `translator` phải đúng sự thật. Partial cũ chưa có `model`
+> → coi như khớp (không mất tiến trình đang dở).
 
 Partial không gắn với model. Dịch 20 dòng bằng model A, chạy tiếp bằng
 model B → `translated.json` trộn hai model, key `translator` chỉ ghi
@@ -183,7 +197,13 @@ có test hồi quy.
 Hệ quả: `--force` bị ngắt thì **bản dịch cũ mất luôn** (chỉ còn partial
 mới). Chấp nhận vì bạn đã yêu cầu dịch lại.
 
-### C7. [CẦN DUYỆT] Transcribe lại sau khi đã dịch → không phát hiện
+### C7. [ĐÃ CHỐT 2026-09-17 — CHƯA IMPLEMENT] Transcribe lại sau khi đã dịch → không phát hiện
+
+> **Chốt** (user: chọn cách tiện cho user): thêm `transcript_sha256` vào
+> `translated.json`. Hash khác transcript hiện tại → **tự dịch lại** (có
+> log), không SKIP. File cũ chưa có hash → SKIP như trước. Đổi model trong
+> config khi `translated.json` đã xong thì vẫn SKIP (dịch lại tốn thời
+> gian, phải chủ động `--force`).
 
 `translated.json` đã có thì SKIP, không so với transcript hiện tại. Nếu
 chạy `transcribe --force` (vd sửa `--source-lang`) mà quên `translate

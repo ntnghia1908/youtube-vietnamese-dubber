@@ -104,6 +104,10 @@ Ba cái bẫy đã mất thời gian vì nó:
 
 ## Việc tiếp theo
 
+**Trước CP4 — fix(translation)**: implement C3, C5, C7 đã chốt trong
+`docs/decisions/checkpoint-3.md` (đổi schema `translated.json`: thêm
+`failed_ids`, `transcript_sha256`). Cập nhật mục A1 của file đó cho CP4.
+
 **Checkpoint 4 — Edge TTS**: `tts/base.py` + `tts/edge.py`, sinh
 `tts/000001.mp3`… từ `translated.json`; resume, retry, cache, config voice
 và speaking rate. Đọc trước mục A của `docs/decisions/checkpoint-3.md`
