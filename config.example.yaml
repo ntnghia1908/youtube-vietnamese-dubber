@@ -1,0 +1,24 @@
+# Cấu hình mẫu cho YouTube Vietnamese Dubber.
+# Copy thành `config.yaml` (đã gitignore) rồi sửa theo máy của bạn.
+# Mọi key đều tùy chọn trừ `translation.model`. Flag CLI ghi đè giá trị ở đây.
+
+workspace: ./output
+
+target_language: vi
+
+whisper:
+  model: medium          # tiny/base/small/medium/large-v3
+  device: auto           # auto/cpu/cuda
+  compute_type: auto
+
+translation:
+  provider: ollama
+  model: qwen3:8b        # bắt buộc — không có mặc định trong code
+  # host: http://localhost:11434   # bỏ trống -> biến môi trường OLLAMA_HOST -> localhost
+  batch_size: 25         # số segment mỗi lần gọi model (plan khuyến nghị 20–30)
+  context_size: 5        # số dòng đã dịch trước đó gửi kèm làm ngữ cảnh
+  max_attempts: 3        # số lần thử mỗi batch trước khi chia đôi batch
+  temperature: 0.3       # > 0 để lần thử lại ra output khác
+  num_ctx: 8192          # context window của Ollama; nhỏ quá thì prompt bị cắt im lặng
+  timeout_seconds: 300
+  think: false           # tắt chế độ suy nghĩ của qwen3; để null nếu model không hỗ trợ

@@ -5,8 +5,8 @@ Xem docs/IMPLEMENTATION_PLAN.md để biết kiến trúc pipeline đầy đủ 
 trình các checkpoint.
 
 Đã implement: tải video (Checkpoint 1), trích audio + speech-to-text
-(Checkpoint 2). Chưa implement: translation, TTS, timing normalization,
-render, pipeline end-to-end, playlist.
+(Checkpoint 2), dịch transcript + config loader (Checkpoint 3). Chưa
+implement: TTS, timing normalization, render, pipeline end-to-end, playlist.
 """
 
 __version__ = "0.1.0"

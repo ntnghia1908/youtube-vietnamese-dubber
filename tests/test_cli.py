@@ -15,11 +15,13 @@ import sys
 import unittest
 from io import StringIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from app import cli
 from app.audio.ffmpeg import AudioExtractionError
 from app.transcription.whisper import Segment, TranscriptionError, TranscriptResult
+from app.translation.translate import TranslatedSegment, TranslationResult
 from app.youtube.download import EpisodeInfo, VideoDownloadError
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -135,6 +137,91 @@ class TestTranscribeSubcommand(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("model load failed", fake_stderr.getvalue())
+
+    def test_transcribe_uses_whisper_model_from_config(self) -> None:
+        fake_result = TranscriptResult(language="en", segments=[], transcript_path=Path("t.json"))
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "c.yaml"
+            config_path.write_text("whisper:\n  model: small\n", encoding="utf-8")
+            with (
+                patch("app.audio.ffmpeg.extract_audio"),
+                patch(
+                    "app.transcription.whisper.transcribe_audio", return_value=fake_result
+                ) as mock_transcribe,
+                patch("sys.stdout", new_callable=StringIO),
+            ):
+                cli.main(["transcribe", "output/ep", "--config", str(config_path)])
+                self.assertEqual(mock_transcribe.call_args.kwargs["model_size"], "small")
+
+                # Flag CLI ghi đè config.
+                cli.main(
+                    ["transcribe", "output/ep", "--config", str(config_path), "--whisper-model", "tiny"]
+                )
+                self.assertEqual(mock_transcribe.call_args.kwargs["model_size"], "tiny")
+
+
+class TestTranslateSubcommand(unittest.TestCase):
+    def _result(self, skipped: bool = False) -> TranslationResult:
+        return TranslationResult(
+            translated_path=Path("output/ep/translated.json"),
+            source_language="en",
+            target_language="vi",
+            segments=[TranslatedSegment(1, 0.0, 1.0, "Hi", "Chào")],
+            skipped=skipped,
+        )
+
+    def test_translate_uses_cli_model_over_config(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "c.yaml"
+            config_path.write_text(
+                "translation:\n  model: from-config\n  batch_size: 20\n", encoding="utf-8"
+            )
+            with (
+                patch(
+                    "app.translation.translate.translate_transcript", return_value=self._result()
+                ) as mock_translate,
+                patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+            ):
+                exit_code = cli.main(
+                    ["translate", "output/ep", "--config", str(config_path), "--model", "from-cli"]
+                )
+
+        self.assertEqual(exit_code, 0)
+        translator = mock_translate.call_args.args[2]
+        self.assertEqual(translator.model, "from-cli")
+        self.assertEqual(mock_translate.call_args.kwargs["batch_size"], 20)
+        self.assertEqual(mock_translate.call_args.kwargs["target_language"], "vi")
+        self.assertIn("en -> vi", fake_stdout.getvalue())
+
+    def test_translate_without_model_errors(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "c.yaml"
+            config_path.write_text("translation:\n  batch_size: 20\n", encoding="utf-8")
+            with patch("sys.stderr", new_callable=StringIO) as fake_stderr:
+                exit_code = cli.main(["translate", "output/ep", "--config", str(config_path)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--model", fake_stderr.getvalue())
+
+    def test_translate_skip_message(self) -> None:
+        with (
+            patch("app.translation.translate.translate_transcript", return_value=self._result(True)),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["translate", "output/ep", "--model", "m"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("SKIP", fake_stdout.getvalue())
+
+    def test_invalid_config_file_errors(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "c.yaml"
+            config_path.write_text("translation:\n  batchsize: 20\n", encoding="utf-8")
+            with patch("sys.stderr", new_callable=StringIO) as fake_stderr:
+                exit_code = cli.main(["translate", "output/ep", "--config", str(config_path)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("batchsize", fake_stderr.getvalue())
 
 
 if __name__ == "__main__":

@@ -95,7 +95,8 @@ def _write_transcript(language: str, segments: list[Segment], transcript_path: P
     )
 
 
-def _read_transcript(transcript_path: Path) -> tuple[str, list[Segment]]:
+def read_transcript(transcript_path: Path) -> tuple[str, list[Segment]]:
+    """Đọc transcript.json — dùng lại ở stage translate."""
     data: dict[str, Any] = json.loads(transcript_path.read_text(encoding="utf-8"))
     segments = [
         Segment(id=s["id"], start=s["start"], end=s["end"], text=s["text"])
@@ -123,7 +124,7 @@ def transcribe_audio(
     transcript_path = Path(transcript_path)
 
     if transcript_path.exists() and not force:
-        language, segments = _read_transcript(transcript_path)
+        language, segments = read_transcript(transcript_path)
         return TranscriptResult(
             language=language, segments=segments, transcript_path=transcript_path
         )
