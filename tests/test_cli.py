@@ -18,6 +18,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import cli
+from app.audio.ffmpeg import AudioExtractionError
+from app.transcription.whisper import Segment, TranscriptionError, TranscriptResult
 from app.youtube.download import EpisodeInfo, VideoDownloadError
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -86,6 +88,53 @@ class TestDownloadSubcommand(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("URL không hợp lệ", fake_stderr.getvalue())
+
+
+class TestTranscribeSubcommand(unittest.TestCase):
+    def test_transcribe_success_prints_summary(self) -> None:
+        fake_result = TranscriptResult(
+            language="en",
+            segments=[Segment(id=1, start=0.0, end=1.0, text="Hi")],
+            transcript_path=Path("output/ep/transcript.json"),
+        )
+        with (
+            patch("app.audio.ffmpeg.extract_audio", return_value=Path("output/ep/audio.wav")),
+            patch("app.transcription.whisper.transcribe_audio", return_value=fake_result),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["transcribe", "output/ep"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("en", output)
+        self.assertIn("transcript.json", output)
+
+    def test_transcribe_audio_extraction_failure(self) -> None:
+        with (
+            patch(
+                "app.audio.ffmpeg.extract_audio",
+                side_effect=AudioExtractionError("Không tìm thấy ffmpeg"),
+            ),
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(["transcribe", "output/ep"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("ffmpeg", fake_stderr.getvalue())
+
+    def test_transcribe_whisper_failure(self) -> None:
+        with (
+            patch("app.audio.ffmpeg.extract_audio", return_value=Path("output/ep/audio.wav")),
+            patch(
+                "app.transcription.whisper.transcribe_audio",
+                side_effect=TranscriptionError("model load failed"),
+            ),
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(["transcribe", "output/ep"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("model load failed", fake_stderr.getvalue())
 
 
 if __name__ == "__main__":

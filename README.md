@@ -12,22 +12,26 @@ Kiến trúc pipeline đầy đủ, nguyên tắc thiết kế và lộ trình t
 checkpoint được mô tả chi tiết tại
 [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
-## Trạng thái hiện tại — Checkpoint 1: Download video
+## Trạng thái hiện tại — Checkpoint 2: Audio extraction + Whisper
 
 Đã có:
 
 - Project skeleton (Checkpoint 0).
 - Subcommand `download`: tải một video YouTube (yt-dlp), tạo
-  `metadata.json` + `source.mp4` trong một thư mục episode riêng.
+  `metadata.json` + `source.mp4` trong một thư mục episode riêng
+  (Checkpoint 1).
+- Subcommand `transcribe`: trích audio từ `source.mp4` (ffmpeg) rồi
+  speech-to-text (faster-whisper), tạo `audio.wav` + `transcript.json`
+  trong thư mục episode (Checkpoint 2).
 
-Chưa có: transcription, translation, TTS, timing normalization,
-render, pipeline end-to-end, playlist.
+Chưa có: translation, TTS, timing normalization, render, pipeline
+end-to-end, playlist.
 
 ## Yêu cầu
 
 - Python 3.11 trở lên.
-- `ffmpeg` cài sẵn trên máy nếu sau này cần merge audio+video khi tải
-  (chưa bắt buộc ở checkpoint này, nhưng yt-dlp sẽ cần tới).
+- `ffmpeg` cài sẵn trên máy và có trong `PATH` — cần cho `yt-dlp` (merge
+  audio+video khi tải) và cho subcommand `transcribe` (trích audio).
 
 ## Cài đặt (development)
 
@@ -37,7 +41,8 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-Dependency hiện tại: `yt-dlp` (dùng cho subcommand `download`).
+Dependency hiện tại: `yt-dlp` (subcommand `download`), `faster-whisper`
+(subcommand `transcribe`).
 
 ## Sử dụng
 
@@ -49,10 +54,25 @@ python -m app download "https://www.youtube.com/watch?v=VIDEO_ID"
 
 # Chỉ định thư mục workspace khác + ép tải lại dù đã có source.mp4
 python -m app download "URL" --workspace ./output --force
+
+# Trích audio + transcribe episode đã tải (mặc định model "medium")
+python -m app transcribe "output/VIDEO_ID__title"
+
+# Chọn model Whisper khác + ép chạy lại dù đã có audio.wav/transcript.json
+python -m app transcribe "output/VIDEO_ID__title" --whisper-model small --force
+
+# Ép ngôn ngữ gốc khi auto-detect đoán sai (vd video tiếng Trung)
+python -m app transcribe "output/VIDEO_ID__title" --source-lang zh
 ```
 
-Chạy lại lệnh `download` với cùng URL sẽ **không tải lại** nếu
-`source.mp4` đã tồn tại trong thư mục episode (hỗ trợ resume).
+Nên dùng `--source-lang` cho video không phải tiếng Anh: auto-detect của
+Whisper có thể đoán sai với confidence thấp (nhạc nền ở đầu video), khiến
+toàn bộ transcript bị *dịch* sang ngôn ngữ đoán nhầm thay vì phiên âm
+đúng tiếng gốc.
+
+Chạy lại lệnh `download`/`transcribe` sẽ **không làm lại** các bước đã
+có output (`source.mp4`, `audio.wav`, `transcript.json`) trừ khi dùng
+`--force` (hỗ trợ resume).
 
 ## Chạy test
 
@@ -66,11 +86,13 @@ python -m unittest discover -s tests
 youtube-vietnamese-dubber/
 ├── app/                  # Source code chính (package "app")
 │   ├── __main__.py       # Cho phép chạy `python -m app`
-│   ├── cli.py            # CLI (argparse); --help/--version + subcommand download
+│   ├── cli.py            # CLI (argparse); subcommand download, transcribe
 │   ├── youtube/          # Stage: metadata & download video (yt-dlp)
 │   │   └── download.py   # download_video(): metadata.json + source.mp4, có resume
 │   ├── audio/            # Stage: xử lý audio/video (FFmpeg)
+│   │   └── ffmpeg.py     # extract_audio(): source.mp4 -> audio.wav, có resume
 │   ├── transcription/    # Stage: speech-to-text (faster-whisper)
+│   │   └── whisper.py    # transcribe_audio(): audio.wav -> transcript.json, có resume
 │   ├── translation/      # Stage: dịch thuật (adapter Ollama/OpenAI/manual)
 │   ├── tts/               # Stage: text-to-speech tiếng Việt (edge-tts)
 │   ├── synchronization/  # Stage: chuẩn hoá timing giữa audio gốc và TTS
@@ -85,10 +107,10 @@ youtube-vietnamese-dubber/
 └── pyproject.toml
 ```
 
-Mỗi package stage (`youtube`, `audio`, `transcription`, `translation`,
-`tts`, `synchronization`, `pipeline`) hiện chỉ chứa `__init__.py` dạng
-placeholder, tương ứng với từng checkpoint sẽ được triển khai riêng lẻ
-theo `docs/IMPLEMENTATION_PLAN.md`.
+Các package stage còn lại (`translation`, `tts`, `synchronization`,
+`pipeline`) hiện chỉ chứa `__init__.py` dạng placeholder, tương ứng với
+từng checkpoint sẽ được triển khai riêng lẻ theo
+`docs/IMPLEMENTATION_PLAN.md`.
 
 ## Ghi chú thiết kế
 

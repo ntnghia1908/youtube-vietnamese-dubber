@@ -4,8 +4,9 @@ Công cụ local để tạo bản thuyết minh tiếng Việt cho video/playli
 Xem docs/IMPLEMENTATION_PLAN.md để biết kiến trúc pipeline đầy đủ và lộ
 trình các checkpoint.
 
-Checkpoint 0 (hiện tại): chỉ có project skeleton, CLI hiển thị help.
-Chưa implement download, transcription, translation, TTS hay xử lý video.
+Đã implement: tải video (Checkpoint 1), trích audio + speech-to-text
+(Checkpoint 2). Chưa implement: translation, TTS, timing normalization,
+render, pipeline end-to-end, playlist.
 """
 
 __version__ = "0.1.0"
