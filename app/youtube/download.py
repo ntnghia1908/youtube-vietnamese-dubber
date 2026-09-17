@@ -21,6 +21,13 @@ SOURCE_FILENAME = "source.mp4"
 _UNSAFE_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _MAX_TITLE_LENGTH = 60
 
+# Một số video vẫn public nhưng với player client mặc định của YouTube chỉ
+# trả về storyboard (mhtml) — không có stream A/V nào — khiến yt-dlp báo
+# "This video is not available". Client "android" thường vẫn trả được format
+# muxed 18 (mp4 360p, h264+aac). Khai báo nhiều client để yt-dlp gộp format
+# từ tất cả, nên không làm mất các format chất lượng cao của client mặc định.
+_EXTRACTOR_ARGS = {"youtube": {"player_client": ["default", "android"]}}
+
 
 class VideoDownloadError(RuntimeError):
     """Lỗi rõ ràng khi lấy metadata hoặc tải video thất bại."""
@@ -85,6 +92,7 @@ def _extract_info(url: str) -> dict[str, Any]:
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
+        "extractor_args": _EXTRACTOR_ARGS,
         "logger": _SilentYtdlpLogger(),
     }
     try:
@@ -136,6 +144,7 @@ def _download_source(url: str, source_path: Path) -> None:
         # --force. Mặc định yt-dlp sẽ bỏ qua file đã tồn tại, khiến --force
         # không thật sự tải lại; bật overwrites để --force đúng như mô tả.
         "overwrites": True,
+        "extractor_args": _EXTRACTOR_ARGS,
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,

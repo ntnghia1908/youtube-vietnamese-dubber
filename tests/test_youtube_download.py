@@ -182,6 +182,18 @@ class TestDownloadFormatSelector(unittest.TestCase):
             opts = self._capture_ydl_opts(Path(tmp) / "source.mp4")
             self.assertTrue(opts.get("overwrites"))
 
+    def test_player_client_fallback_is_configured(self) -> None:
+        """Regression: video public nhưng client mặc định chỉ trả storyboard.
+
+        Khi đó yt-dlp báo "This video is not available" dù video vẫn xem
+        được; client "android" vẫn lấy được format muxed 18.
+        """
+        with TemporaryDirectory() as tmp:
+            opts = self._capture_ydl_opts(Path(tmp) / "source.mp4")
+            clients = opts["extractor_args"]["youtube"]["player_client"]
+            self.assertIn("android", clients)
+            self.assertIn("default", clients)
+
 
 if __name__ == "__main__":
     unittest.main()
