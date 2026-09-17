@@ -120,8 +120,22 @@ def _download_source(url: str, source_path: Path) -> None:
 
     ydl_opts = {
         "outtmpl": str(source_path.with_suffix("")) + ".%(ext)s",
-        "format": "mp4/bestvideo+bestaudio/best",
+        # Pipeline BẮT BUỘC phải có audio track (bước transcribe trích audio
+        # từ file này). Không dùng selector trần "mp4": trên YouTube hiện đại
+        # nó khớp ngay một DASH stream mp4 *chỉ có video* (vd AV1 1080p) và
+        # không bao giờ rơi xuống nhánh bestvideo+bestaudio -> source.mp4 câm.
+        # Không có nhánh "/best" trần ở cuối: thà báo lỗi rõ ràng ngay lúc tải
+        # còn hơn tạo ra file không audio rồi vỡ ở bước transcribe.
+        "format": (
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
+            "bestvideo+bestaudio/"
+            "best[acodec!=none]"
+        ),
         "merge_output_format": "mp4",
+        # Hàm này chỉ được gọi khi source.mp4 chưa có HOẶC người dùng yêu cầu
+        # --force. Mặc định yt-dlp sẽ bỏ qua file đã tồn tại, khiến --force
+        # không thật sự tải lại; bật overwrites để --force đúng như mô tả.
+        "overwrites": True,
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,

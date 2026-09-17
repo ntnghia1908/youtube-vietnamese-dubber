@@ -15,6 +15,7 @@ from unittest.mock import patch
 from app.youtube.download import (
     EpisodeInfo,
     VideoDownloadError,
+    _download_source,
     build_episode_dir_name,
     download_video,
     sanitize_filename,
@@ -130,6 +131,56 @@ class TestDownloadVideo(unittest.TestCase):
             ):
                 with self.assertRaises(VideoDownloadError):
                     download_video("https://youtu.be/broken", workspace)
+
+
+class TestDownloadFormatSelector(unittest.TestCase):
+    """Regression: file tải về BẮT BUỘC phải có audio track.
+
+    Selector cũ ``"mp4/bestvideo+bestaudio/best"`` khớp ngay một DASH
+    stream mp4 *chỉ có video* (AV1 1080p) nên ``source.mp4`` bị câm, và
+    bước transcribe vỡ với "Output file does not contain any stream".
+    """
+
+    def _capture_ydl_opts(self, source_path: Path) -> dict:
+        """Chạy ``_download_source`` với yt-dlp giả, thu lại options đã truyền."""
+        captured: dict = {}
+
+        class _FakeYDL:
+            def __init__(self, opts: dict) -> None:
+                captured.update(opts)
+
+            def __enter__(self) -> "_FakeYDL":
+                return self
+
+            def __exit__(self, *exc_info: object) -> bool:
+                return False
+
+            def download(self, urls: list[str]) -> None:
+                # yt-dlp thật mới là bên tạo file; giả lập lại để qua
+                # bước kiểm tra tồn tại ở cuối _download_source.
+                source_path.write_bytes(b"fake-video-with-audio")
+
+        with patch("yt_dlp.YoutubeDL", _FakeYDL):
+            _download_source("https://youtu.be/vid001", source_path)
+        return captured
+
+    def test_every_format_alternative_requires_audio(self) -> None:
+        with TemporaryDirectory() as tmp:
+            opts = self._capture_ydl_opts(Path(tmp) / "source.mp4")
+
+            alternatives = opts["format"].split("/")
+            self.assertGreater(len(alternatives), 1)
+            for alt in alternatives:
+                self.assertTrue(
+                    "+bestaudio" in alt or "acodec!=none" in alt,
+                    msg=f"Nhánh selector {alt!r} có thể khớp file không có audio.",
+                )
+
+    def test_force_actually_overwrites_existing_file(self) -> None:
+        """``--force`` phải thật sự tải đè, không để yt-dlp bỏ qua file cũ."""
+        with TemporaryDirectory() as tmp:
+            opts = self._capture_ydl_opts(Path(tmp) / "source.mp4")
+            self.assertTrue(opts.get("overwrites"))
 
 
 if __name__ == "__main__":
