@@ -31,3 +31,7 @@ tts:
   concurrency: 4                # số segment tổng hợp song song
   max_attempts: 3               # số lần thử mỗi segment trước khi đánh dấu lỗi
   timeout_seconds: 60           # timeout nhận audio cho mỗi segment
+
+timing:
+  normal_max_ratio: 1.05  # tts_duration/slot <= giá trị này: giữ nguyên tốc độ
+  max_tempo: 1.25          # co giãn (ffmpeg atempo) tối đa; vượt quá -> too_long

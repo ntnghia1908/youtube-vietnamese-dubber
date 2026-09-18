@@ -22,6 +22,7 @@ from app import cli
 from app.audio.ffmpeg import AudioExtractionError
 from app.transcription.whisper import Segment, TranscriptionError, TranscriptResult
 from app.translation.translate import TranslatedSegment, TranslationResult
+from app.synchronization.timing import TimingError, TimingResult
 from app.tts.synthesize import TTSResult
 from app.youtube.download import EpisodeInfo, VideoDownloadError
 
@@ -315,6 +316,97 @@ class TestTTSSubcommand(unittest.TestCase):
         output = fake_stdout.getvalue()
         self.assertIn("CẢNH BÁO", output)
         self.assertIn("7", output)
+
+
+class TestNormalizeSubcommand(unittest.TestCase):
+    def _result(self, skipped: bool = False, missing_ids: list[int] | None = None) -> TimingResult:
+        return TimingResult(
+            normalized_path=Path("output/ep/normalized.json"),
+            normal_ids=[1],
+            stretched_ids=[],
+            too_long_ids=[],
+            silent_ids=[],
+            missing_ids=missing_ids or [],
+            skipped=skipped,
+        )
+
+    def test_normalize_help_runs(self) -> None:
+        result = self._run_help_subprocess("normalize", "--help")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("normalize", result.stdout.lower())
+
+    def _run_help_subprocess(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "app", *args],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+
+    def test_normalize_prints_report(self) -> None:
+        with (
+            patch(
+                "app.synchronization.timing.normalize_timing",
+                return_value=self._result(),
+            ),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["normalize", "output/ep"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("[normalize] normal    : 1", output)
+        self.assertIn("normalized.json", output)
+
+    def test_normalize_skip_message(self) -> None:
+        with (
+            patch(
+                "app.synchronization.timing.normalize_timing",
+                return_value=self._result(skipped=True),
+            ),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["normalize", "output/ep"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("SKIP", fake_stdout.getvalue())
+
+    def test_normalize_warns_on_missing_ids_but_exits_zero(self) -> None:
+        with (
+            patch(
+                "app.synchronization.timing.normalize_timing",
+                return_value=self._result(missing_ids=[5, 6]),
+            ),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["normalize", "output/ep"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("CẢNH BÁO", output)
+        self.assertIn("5, 6", output)
+
+    def test_normalize_invalid_max_tempo_errors(self) -> None:
+        with patch("sys.stderr", new_callable=StringIO) as fake_stderr:
+            exit_code = cli.main(["normalize", "output/ep", "--max-tempo", "3"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("max_tempo", fake_stderr.getvalue())
+
+    def test_normalize_missing_manifest_errors(self) -> None:
+        with (
+            patch(
+                "app.synchronization.timing.normalize_timing",
+                side_effect=TimingError("Không tìm thấy tts/manifest.json. Chạy `tts` trước."),
+            ),
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(["normalize", "output/ep"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("manifest.json", fake_stderr.getvalue())
 
 
 if __name__ == "__main__":

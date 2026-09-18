@@ -4,6 +4,7 @@ Checkpoint 1: subcommand ``download`` (tải một video YouTube).
 Checkpoint 2: subcommand ``transcribe`` (trích audio + speech-to-text).
 Checkpoint 3: subcommand ``translate`` (dịch transcript) + ``--config``.
 Checkpoint 4: subcommand ``tts`` (tổng hợp giọng nói bằng edge-tts).
+Checkpoint 5: subcommand ``normalize`` (chuẩn hoá timing tts vs slot gốc).
 Các subcommand khác (render, dub, playlist, ...) sẽ được thêm dần ở
 các checkpoint tiếp theo, xem docs/IMPLEMENTATION_PLAN.md.
 
@@ -20,7 +21,13 @@ from dataclasses import replace
 from pathlib import Path
 
 from app import __version__
-from app.config import AppConfig, ConfigError, load_config, validate_rate_or_volume
+from app.config import (
+    AppConfig,
+    ConfigError,
+    load_config,
+    validate_rate_or_volume,
+    validate_timing_ratios,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -167,6 +174,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Tổng hợp lại toàn bộ segment dù tts/manifest.json đã đủ.",
+    )
+
+    normalize_parser = subparsers.add_parser(
+        "normalize",
+        parents=[common],
+        help="Chuẩn hoá timing giữa tts/*.mp3 và slot gốc, tạo normalized.json.",
+    )
+    normalize_parser.add_argument(
+        "episode_dir",
+        help="Thư mục episode đã có translated.json + tts/ (tạo bởi subcommand `tts`).",
+    )
+    normalize_parser.add_argument(
+        "--max-tempo",
+        type=float,
+        default=None,
+        help="Co giãn (ffmpeg atempo) tối đa. Mặc định: `timing.max_tempo` trong config, hoặc 1.25.",
+    )
+    normalize_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Tính lại toàn bộ (probe + co giãn) dù normalized.json đã khớp.",
     )
 
     return parser
@@ -347,11 +375,64 @@ def _cmd_tts(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
+def _cmd_normalize(args: argparse.Namespace, config: AppConfig) -> int:
+    from app.synchronization.timing import TimingError, normalize_timing
+
+    max_tempo = args.max_tempo if args.max_tempo is not None else config.timing.max_tempo
+    normal_max_ratio = config.timing.normal_max_ratio
+    try:
+        validate_timing_ratios(normal_max_ratio, max_tempo)
+    except ConfigError as exc:
+        print(f"[normalize] LỖI: {exc}", file=sys.stderr)
+        return 1
+
+    episode_dir = Path(args.episode_dir)
+    try:
+        result = normalize_timing(
+            episode_dir,
+            normal_max_ratio=normal_max_ratio,
+            max_tempo=max_tempo,
+            force=args.force,
+            log=lambda message: print(message, flush=True),
+        )
+    except TimingError as exc:
+        print(f"[normalize] LỖI: {exc}", file=sys.stderr)
+        return 1
+
+    if result.skipped:
+        print("[normalize] SKIP: normalized.json đã khớp (dùng --force để tính lại).")
+    total = (
+        len(result.normal_ids)
+        + len(result.stretched_ids)
+        + len(result.too_long_ids)
+        + len(result.silent_ids)
+        + len(result.missing_ids)
+    )
+    print(f"[normalize] segments  : {total}")
+    print(f"[normalize] normal    : {len(result.normal_ids)}")
+    print(f"[normalize] stretched : {len(result.stretched_ids)}")
+    too_long_suffix = f" (id {', '.join(str(i) for i in result.too_long_ids)})" if result.too_long_ids else ""
+    print(f"[normalize] too_long  : {len(result.too_long_ids)}{too_long_suffix}")
+    print(f"[normalize] silent    : {len(result.silent_ids)}")
+    print(f"[normalize] missing   : {len(result.missing_ids)}")
+    print(f"[normalize] output    : {result.normalized_path}")
+    if result.missing_ids:
+        # Giống C3/A3 của các stage trước: thiếu audio không được chặn cả
+        # episode, nhưng phải cảnh báo rõ để người dùng biết chạy lại `tts`.
+        ids = ", ".join(str(i) for i in result.missing_ids)
+        print(
+            f"[normalize] CẢNH BÁO: {len(result.missing_ids)} segment thiếu audio "
+            f"(id {ids}) — chạy lại `tts` rồi `normalize`."
+        )
+    return 0
+
+
 _COMMANDS = {
     "download": _cmd_download,
     "transcribe": _cmd_transcribe,
     "translate": _cmd_translate,
     "tts": _cmd_tts,
+    "normalize": _cmd_normalize,
 }
 
 

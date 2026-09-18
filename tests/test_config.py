@@ -100,6 +100,36 @@ class TestParseConfig(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "provider"):
             parse_config({"tts": {"provider": "azure"}})
 
+    def test_timing_section_defaults(self) -> None:
+        config = parse_config(None)
+        self.assertEqual(config.timing.normal_max_ratio, 1.05)
+        self.assertEqual(config.timing.max_tempo, 1.25)
+
+    def test_timing_section_reads_values(self) -> None:
+        config = parse_config({"timing": {"normal_max_ratio": 1.1, "max_tempo": 1.4}})
+        self.assertEqual(config.timing.normal_max_ratio, 1.1)
+        self.assertEqual(config.timing.max_tempo, 1.4)
+
+    def test_timing_rejects_unknown_key(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "max_tempoo"):
+            parse_config({"timing": {"max_tempoo": 1.4}})
+
+    def test_timing_rejects_max_tempo_not_greater_than_normal_max_ratio(self) -> None:
+        with self.assertRaises(ConfigError):
+            parse_config({"timing": {"normal_max_ratio": 1.2, "max_tempo": 1.1}})
+
+    def test_timing_rejects_max_tempo_above_two(self) -> None:
+        with self.assertRaises(ConfigError):
+            parse_config({"timing": {"max_tempo": 2.5}})
+
+    def test_timing_rejects_normal_max_ratio_below_one(self) -> None:
+        with self.assertRaises(ConfigError):
+            parse_config({"timing": {"normal_max_ratio": 0.9}})
+
+    def test_timing_rejects_wrong_type(self) -> None:
+        with self.assertRaises(ConfigError):
+            parse_config({"timing": {"max_tempo": "1.25"}})
+
 
 class TestLoadConfig(unittest.TestCase):
     def test_explicit_missing_path_errors(self) -> None:
@@ -127,6 +157,8 @@ class TestLoadConfig(unittest.TestCase):
         self.assertTrue(config.translation.model)
         self.assertEqual(config.tts.provider, "edge")
         self.assertEqual(config.tts.voice, "vi-VN-HoaiMyNeural")
+        self.assertEqual(config.timing.normal_max_ratio, 1.05)
+        self.assertEqual(config.timing.max_tempo, 1.25)
 
 
 if __name__ == "__main__":

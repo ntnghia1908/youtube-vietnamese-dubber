@@ -61,12 +61,19 @@ class TTSConfig:
 
 
 @dataclass(frozen=True)
+class TimingConfig:
+    normal_max_ratio: float = 1.05
+    max_tempo: float = 1.25
+
+
+@dataclass(frozen=True)
 class AppConfig:
     workspace: Path = Path("output")
     target_language: str = "vi"
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     translation: TranslationConfig = field(default_factory=TranslationConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
+    timing: TimingConfig = field(default_factory=TimingConfig)
 
 
 # Kiểu hợp lệ cho từng key. ``None`` trong tuple = cho phép giá trị null.
@@ -98,6 +105,10 @@ _TTS_TYPES: dict[str, tuple[type | None, ...]] = {
     "timeout_seconds": (int, float),
 }
 _SUPPORTED_TTS_PROVIDERS = ("edge",)
+_TIMING_TYPES: dict[str, tuple[type | None, ...]] = {
+    "normal_max_ratio": (int, float),
+    "max_tempo": (int, float),
+}
 # vd "+0%", "-10%", "+100%". YAML `rate: +0%` không quote vẫn parse ra str,
 # nhưng thiếu dấu % (`rate: 0%` thành số 0 hoặc thiếu dấu +/-) là lỗi hay gặp.
 _RATE_VOLUME_RE = re.compile(r"^[+-]\d{1,3}%$")
@@ -113,6 +124,22 @@ def validate_rate_or_volume(section: str, key: str, value: str) -> None:
         raise ConfigError(
             f"`{section}.{key}` phải có dạng \"+N%\" hoặc \"-N%\" (vd \"+0%\", \"-10%\"), "
             f"đang là {value!r}."
+        )
+
+
+def validate_timing_ratios(normal_max_ratio: float, max_tempo: float) -> None:
+    """Kiểm tra ``1.0 <= normal_max_ratio < max_tempo <= 2.0``.
+
+    Dùng chung cho ``config.yaml`` (``parse_config``) và flag CLI
+    (``--max-tempo``) để cùng một thông báo lỗi. ``max_tempo <=
+    normal_max_ratio`` không có ý nghĩa: mọi câu hơi dài hơn ngưỡng
+    "normal" sẽ ngay lập tức bị coi là "too_long" vì không còn khoảng để
+    co giãn.
+    """
+    if not (1.0 <= normal_max_ratio < max_tempo <= 2.0):
+        raise ConfigError(
+            "`timing.normal_max_ratio`/`timing.max_tempo` không hợp lệ: cần "
+            f"1.0 <= normal_max_ratio ({normal_max_ratio}) < max_tempo ({max_tempo}) <= 2.0."
         )
 
 
@@ -157,7 +184,7 @@ def parse_config(data: Any) -> AppConfig:
     if not isinstance(data, dict):
         raise ConfigError("File config phải là một mapping ở cấp cao nhất.")
 
-    top_level = {"workspace", "target_language", "whisper", "translation", "tts"}
+    top_level = {"workspace", "target_language", "whisper", "translation", "tts", "timing"}
     unknown = sorted(set(data) - top_level)
     if unknown:
         raise ConfigError(
@@ -204,6 +231,10 @@ def parse_config(data: Any) -> AppConfig:
     for key in ("concurrency", "max_attempts", "timeout_seconds"):
         _positive("tts", key, getattr(tts, key))
     kwargs["tts"] = tts
+
+    timing = TimingConfig(**_check_section(data.get("timing"), "timing", _TIMING_TYPES))
+    validate_timing_ratios(timing.normal_max_ratio, timing.max_tempo)
+    kwargs["timing"] = timing
 
     return AppConfig(**kwargs)
 
