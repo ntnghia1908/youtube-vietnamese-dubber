@@ -161,13 +161,14 @@ class TestTranscribeSubcommand(unittest.TestCase):
 
 
 class TestTranslateSubcommand(unittest.TestCase):
-    def _result(self, skipped: bool = False) -> TranslationResult:
+    def _result(self, skipped: bool = False, failed_ids: list[int] | None = None) -> TranslationResult:
         return TranslationResult(
             translated_path=Path("output/ep/translated.json"),
             source_language="en",
             target_language="vi",
             segments=[TranslatedSegment(1, 0.0, 1.0, "Hi", "Chào")],
             skipped=skipped,
+            failed_ids=failed_ids or [],
         )
 
     def test_translate_uses_cli_model_over_config(self) -> None:
@@ -212,6 +213,23 @@ class TestTranslateSubcommand(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("SKIP", fake_stdout.getvalue())
+
+    def test_translate_warns_on_failed_ids_but_exits_zero(self) -> None:
+        """C3: một câu khó không được chặn cả playlist -> exit code vẫn 0,
+        chỉ in cảnh báo để người dùng biết chạy lại lệnh."""
+        with (
+            patch(
+                "app.translation.translate.translate_transcript",
+                return_value=self._result(failed_ids=[3, 4]),
+            ),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["translate", "output/ep", "--model", "m"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("CẢNH BÁO", output)
+        self.assertIn("3, 4", output)
 
     def test_invalid_config_file_errors(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -6,6 +6,7 @@ Không gọi Ollama thật: stage dùng ``FakeTranslator``, còn
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import unittest
@@ -104,8 +105,13 @@ class FakeTranslator(Translator):
 
     provider = "fake"
 
-    def __init__(self, behaviour: Callable[[list[int], int], dict[int, str]] | None = None) -> None:
-        super().__init__("fake-model")
+    def __init__(
+        self,
+        behaviour: Callable[[list[int], int], dict[int, str]] | None = None,
+        *,
+        model: str = "fake-model",
+    ) -> None:
+        super().__init__(model)
         self.calls: list[dict[str, Any]] = []
         self.behaviour = behaviour or (lambda ids, n: {i: f"vi {i}" for i in ids})
 
@@ -190,6 +196,7 @@ class TestTranslateTranscript(unittest.TestCase):
         self.assertTrue(result.skipped)
         self.assertEqual(translator.calls, [])
         self.assertEqual(result.segments[2].translated_text, "vi 3")
+        self.assertEqual(result.failed_ids, [])
 
     def test_force_retranslates(self) -> None:
         self._write_transcript(3)
@@ -249,7 +256,9 @@ class TestTranslateTranscript(unittest.TestCase):
         # Nửa sau dùng nửa đầu làm ngữ cảnh.
         self.assertEqual(translator.calls[-1]["context"], [1, 2])
 
-    def test_single_segment_failure_keeps_progress_and_resumes(self) -> None:
+    def test_single_segment_failure_is_marked_failed_not_raised(self) -> None:
+        """C3: một segment vẫn lỗi sau khi chia tới còn 1 dòng — không dừng
+        cả stage, các segment khác vẫn dịch đủ và được ghi ra file."""
         self._write_transcript(6)
 
         def bad_segment_5(ids: list[int], n: int) -> dict[int, str]:
@@ -257,18 +266,52 @@ class TestTranslateTranscript(unittest.TestCase):
                 raise TranslatorOutputError("không dịch nổi")
             return {i: f"vi {i}" for i in ids}
 
-        with self.assertRaisesRegex(TranslationError, "segment id 5"):
-            self._run(FakeTranslator(bad_segment_5), batch_size=2)
-        self.assertFalse(self.translated.exists())
-        partial = json.loads(partial_path_for(self.translated).read_text(encoding="utf-8"))
-        self.assertEqual([s["id"] for s in partial["segments"]], [1, 2, 3, 4])
+        result = self._run(FakeTranslator(bad_segment_5), batch_size=2)
+        self.assertFalse(result.skipped)
+        self.assertEqual(result.failed_ids, [5])
+        self.assertEqual(
+            [s.translated_text for s in result.segments],
+            ["vi 1", "vi 2", "vi 3", "vi 4", "", "vi 6"],
+        )
+        self.assertTrue(self.translated.exists())
+        self.assertFalse(partial_path_for(self.translated).exists())
+        data = json.loads(self.translated.read_text(encoding="utf-8"))
+        self.assertEqual(data["failed_ids"], [5])
+        self.assertIn("transcript_sha256", data)
 
-        # Chạy lại: chỉ dịch phần còn thiếu, không gọi lại 1–4.
+    def test_retries_only_failed_ids_from_previous_run(self) -> None:
+        """C3: chạy lại (không --force) khi translated.json có failed_ids
+        chỉ dịch lại đúng các id đó, giữ nguyên bản dịch cũ."""
+        self._write_transcript(6)
+
+        def bad_segment_5(ids: list[int], n: int) -> dict[int, str]:
+            if 5 in ids:
+                raise TranslatorOutputError("không dịch nổi")
+            return {i: f"vi {i}" for i in ids}
+
+        self._run(FakeTranslator(bad_segment_5), batch_size=2)
+
         translator = FakeTranslator()
         result = self._run(translator, batch_size=2)
-        self.assertEqual([c["ids"] for c in translator.calls], [[5, 6]])
-        self.assertEqual([s.translated_text for s in result.segments][:2], ["vi 1", "vi 2"])
-        self.assertTrue(any("resume" in line for line in self.logs))
+        self.assertEqual([c["ids"] for c in translator.calls], [[5]])
+        self.assertEqual(result.failed_ids, [])
+        self.assertEqual(
+            [s.translated_text for s in result.segments],
+            ["vi 1", "vi 2", "vi 3", "vi 4", "vi 5", "vi 6"],
+        )
+        self.assertTrue(any("thử lại" in line and "id 5" in line for line in self.logs))
+
+    def test_all_nonempty_segments_failing_raises(self) -> None:
+        """C3: model/cấu hình hỏng hoàn toàn (không dịch nổi một dòng nào)
+        vẫn phải raise — khác với một câu khó đơn lẻ."""
+        self._write_transcript(3)
+
+        def always_fail(ids: list[int], n: int) -> dict[int, str]:
+            raise TranslatorOutputError("hỏng")
+
+        with self.assertRaises(TranslationError):
+            self._run(FakeTranslator(always_fail), batch_size=4)
+        self.assertFalse(self.translated.exists())
 
     def test_connection_error_is_retried_but_not_split(self) -> None:
         self._write_transcript(4)
@@ -310,6 +353,90 @@ class TestTranslateTranscript(unittest.TestCase):
         result = self._run(translator, batch_size=2)
         self.assertEqual(translator.calls[0]["ids"], [1, 2])
         self.assertEqual(result.segments[0].translated_text, "vi 1")
+
+    def test_partial_discarded_when_model_changes(self) -> None:
+        """C5: partial dở dang bằng model A, chạy tiếp bằng model B —
+        không được trộn hai model vào một translated.json, dịch lại từ đầu."""
+        self._write_transcript(4)
+
+        def fail_second_batch(ids: list[int], n: int) -> dict[int, str]:
+            if 3 in ids:
+                raise TranslationError("stop")
+            return {i: f"cũ {i}" for i in ids}
+
+        with self.assertRaises(TranslationError):
+            self._run(FakeTranslator(fail_second_batch, model="model-a"), batch_size=2)
+        self.assertTrue(partial_path_for(self.translated).exists())
+
+        translator = FakeTranslator(model="model-b")
+        result = self._run(translator, batch_size=2)
+        self.assertEqual(translator.calls[0]["ids"], [1, 2])
+        self.assertEqual(result.segments[0].translated_text, "vi 1")
+        self.assertTrue(any("đang dùng" in line for line in self.logs))
+
+    def test_partial_without_translator_key_resumes(self) -> None:
+        """C5: partial ghi trước khi có key `translator` (schema cũ) vẫn
+        được coi là khớp, không mất tiến trình dở."""
+        self._write_transcript(4)
+        transcript_sha256 = hashlib.sha256(self.transcript.read_bytes()).hexdigest()
+        partial_path_for(self.translated).write_text(
+            json.dumps(
+                {
+                    "transcript_sha256": transcript_sha256,
+                    "source_language": "en",
+                    "target_language": "vi",
+                    "segments": [
+                        {"id": 1, "start": 1.0, "end": 2.5, "source_text": "line 1", "translated_text": "cũ 1"},
+                        {"id": 2, "start": 2.0, "end": 3.5, "source_text": "line 2", "translated_text": "cũ 2"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        translator = FakeTranslator()
+        result = self._run(translator, batch_size=2)
+        self.assertEqual(translator.calls[0]["ids"], [3, 4])
+        self.assertEqual(result.segments[0].translated_text, "cũ 1")
+
+    def test_transcript_hash_mismatch_retranslates_all(self) -> None:
+        """C7: transcribe lại (nội dung transcript đổi) sau khi đã dịch thì
+        không được lặng lẽ SKIP với bản dịch của transcript cũ."""
+        self._write_transcript(3)
+        self._run(FakeTranslator())
+
+        self._write_transcript(4)  # mô phỏng transcribe --force ra nội dung khác
+        translator = FakeTranslator(lambda ids, n: {i: f"mới {i}" for i in ids})
+        result = self._run(translator)
+
+        self.assertEqual(len(translator.calls), 1)
+        self.assertEqual(len(result.segments), 4)
+        self.assertEqual(result.segments[0].translated_text, "mới 1")
+        self.assertTrue(any("transcript đã thay đổi" in line for line in self.logs))
+
+    def test_translated_without_hash_skips(self) -> None:
+        """C7: file dịch từ trước khi có transcript_sha256 vẫn SKIP như cũ,
+        không có gì để so sánh."""
+        self._write_transcript(2)
+        self.translated.write_text(
+            json.dumps(
+                {
+                    "source_language": "en",
+                    "target_language": "vi",
+                    "translator": {"provider": "fake", "model": "fake-model"},
+                    "segments": [
+                        {"id": 1, "start": 1.0, "end": 2.5, "source_text": "line 1", "translated_text": "cũ 1"},
+                        {"id": 2, "start": 2.0, "end": 3.5, "source_text": "line 2", "translated_text": "cũ 2"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        translator = FakeTranslator()
+        result = self._run(translator)
+        self.assertTrue(result.skipped)
+        self.assertEqual(translator.calls, [])
 
     def test_empty_source_lines_not_sent(self) -> None:
         self._write_transcript(3, empty_ids=[2])

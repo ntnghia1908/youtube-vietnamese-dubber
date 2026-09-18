@@ -243,6 +243,14 @@ def _cmd_translate(args: argparse.Namespace, config: AppConfig) -> int:
     print(f"[translate] translated : {result.translated_path}")
     print(f"[translate] language   : {result.source_language} -> {result.target_language}")
     print(f"[translate] segments   : {len(result.segments)}")
+    if result.failed_ids:
+        # C3: một câu khó không được chặn cả tập, nhưng vẫn phải cảnh báo rõ
+        # để người dùng biết chạy lại lệnh (exit 0 để playlist chạy tiếp).
+        ids = ", ".join(str(i) for i in result.failed_ids)
+        print(
+            f"[translate] CẢNH BÁO: {len(result.failed_ids)} segment chưa dịch được "
+            f"(id {ids}) — chạy lại lệnh để thử lại."
+        )
     return 0
 
 

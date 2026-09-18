@@ -10,16 +10,20 @@ chốt lại; mục **[CP4]** là thứ CP4 phải biết khi đọc `translated
 
 ## A. Contract với CP4 — đọc kỹ nhất
 
-### A1. Schema `translated.json` có thêm key `translator` [CP4]
+### A1. Schema `translated.json` có thêm key `translator`, `transcript_sha256`, `failed_ids` [CP4] — cập nhật sau fix(translation) C3/C5/C7
 
 ```json
 {
   "source_language": "en",
   "target_language": "vi",
   "translator": {"provider": "ollama", "model": "qwen3:8b"},
+  "transcript_sha256": "ab12…",
+  "failed_ids": [17],
   "segments": [
     {"id": 1, "start": 0.0, "end": 6.0,
-     "source_text": "...", "translated_text": "..."}
+     "source_text": "...", "translated_text": "..."},
+    {"id": 17, "start": 80.0, "end": 83.5,
+     "source_text": "...", "translated_text": ""}
   ]
 }
 ```
@@ -28,6 +32,20 @@ chốt lại; mục **[CP4]** là thứ CP4 phải biết khi đọc `translated
   bản dịch do model nào tạo khi so sánh chất lượng.
 - `segments` giữ đúng thứ tự và đủ ID như `transcript.json`; `start`/`end`
   copy nguyên từ transcript.
+- `transcript_sha256`: sha256 của nội dung `transcript.json` lúc dịch (C7).
+  File cũ (trước fix này) không có key -> coi như `None`, không so sánh
+  được nên vẫn SKIP như hành vi cũ.
+- `failed_ids`: id các segment không dịch được sau khi chia batch tới còn
+  1 dòng vẫn lỗi (C3). Segment đó có `translated_text: ""` dù `source_text`
+  không rỗng — **khác** với segment gốc rỗng (A2): CP4 phân biệt bằng cách
+  tự kiểm tra `source_text` rỗng hay không nếu cần log riêng, còn hành vi
+  "bỏ qua TTS khi `translated_text` rỗng" áp dụng chung cho cả hai trường
+  hợp nên **không cần CP4 sửa gì thêm**.
+- `translated.json` có thể vẫn tồn tại và **được ghi đè** ở lần chạy sau
+  ngay cả khi không `--force`, nếu `failed_ids` khác rỗng (chế độ thử lại)
+  hoặc hash transcript đổi. CP4/CP8 không nên giả định file này bất biến
+  chỉ vì đã "chạy xong" — chỉ bất biến khi `failed_ids == []` và transcript
+  không đổi.
 
 ### A2. `translated_text` có thể là chuỗi rỗng [CP4]
 
@@ -144,24 +162,38 @@ Chi phí xấu nhất: một segment "không dịch nổi" trong batch 25 đi qu
 tầng lỗi (25→13→7→4→2→1), mỗi tầng 3 lần thử, cộng 5 nửa thành công ≈
 **23 lần gọi model** (~15 phút với batch lớn) trước khi dừng.
 
-### C3. [ĐÃ CHỐT 2026-09-17 — CHƯA IMPLEMENT] Một segment lỗi hẳn → dừng cả stage
+### C3. [ĐÃ IMPLEMENT — fix(translation) 2026-09-18] Một segment lỗi hẳn → không dừng cả stage
 
-> **Chốt:** user cần chạy cả playlist → **không dừng stage**. Segment lỗi
-> sau khi chia đôi tới 1 dòng thì đánh dấu lỗi, dịch tiếp phần còn lại.
-> Cuối cùng vẫn ghi `translated.json`: segment lỗi có `translated_text: ""`,
-> thêm key top-level `failed_ids: [..]` (rỗng nếu không lỗi), in cảnh báo
-> kèm danh sách ID. Chạy lại **không** `--force` mà `failed_ids` khác rỗng
-> → chỉ dịch lại các ID đó (không SKIP). CP4 đã bỏ qua `translated_text`
-> rỗng (A2) nên không phải xử lý gì thêm. Đổi schema → cập nhật A1.
+Implement đúng như chốt: `run_batch` khi chia đôi tới còn 1 dòng mà vẫn
+`TranslatorOutputError` thì log `id N: bỏ qua sau M lần lỗi (...) — sẽ thử
+lại ở lần chạy sau.` rồi `return` (không raise), segment đó không vào
+`done` nên không lọt vào partial/ngữ cảnh. `TranslatorConnectionError` và
+`TranslationError` cấu hình vẫn dừng stage như cũ (server chết thì dịch
+tiếp vô ích).
 
-Hiện tại: một segment đơn lẻ vẫn lỗi sau 3 lần → dừng stage, tiến trình
-đã lưu, chạy lại sẽ thử tiếp.
+Cuối stage: nếu **không một** segment có chữ nào dịch được (tức mọi id có
+`source_text` đều rơi vào diện lỗi) thì raise `TranslationError` — coi là
+model/cấu hình hỏng, không ghi `translated.json`. Ngược lại ghi file bình
+thường với `failed_ids` = các id còn lỗi.
 
-Phương án khác: đánh dấu segment đó lỗi, dịch tiếp phần còn lại, cuối
-cùng báo danh sách lỗi. Với playlist 26 tập chạy qua đêm, dừng hẳn nghĩa
-là một câu khó chặn cả tập. Chọn "dừng" vì đơn giản và không sinh ra
-`translated.json` thiếu câu mà CP4 phải xử lý. **Nên chốt lại trước
-CP8 (playlist).**
+Chạy lại không `--force` mà `failed_ids` khác rỗng → chế độ thử lại: chỉ
+đưa các id trong `failed_ids` vào `pending`, các id khác lấy thẳng bản
+dịch cũ (không gọi lại model, không tính vào batch). Key `translator` ghi
+vào `translated.json` cuối cùng giữ **model của lần dịch trước** (đa số
+dòng do model đó dịch); nếu model hiện tại đang dùng để thử lại khác model
+cũ thì log 1 dòng nêu rõ nhưng vẫn ghi `translator` cũ vào file — tránh
+lịch sử dịch "trộn" hai giá trị `translator` gây hiểu nhầm khi so sánh
+chất lượng ở CP9.
+
+**[ĐÃ CHỐT: giữ nguyên]** Ngưỡng "toàn bộ lỗi" dùng để phân biệt "một câu khó" với
+"model hỏng" là: *không segment có chữ nào* dịch thành công trong cả file
+(không phải "quá X% lỗi"). Ở chế độ thử lại, điều kiện này gần như không
+bao giờ đúng (vì các id không lỗi lần trước đã có sẵn trong `done`), nên
+thực chất chỉ áp dụng cho lần dịch đầu tiên của một episode. Nếu muốn phát
+hiện "model hỏng" ngay cả khi đang thử lại (vd model đổi sang bản hỏng),
+cần thêm ngưỡng riêng — chưa làm vì ngoài phạm vi spec. User duyệt giữ
+nguyên: khi thử lại chỉ có vài câu, và chúng vẫn nằm trong `failed_ids`
+kèm cảnh báo của CLI, nên không mất thông tin.
 
 ### C4. Tiến trình dở lưu ở `translated.partial.json`
 
@@ -174,18 +206,14 @@ CP8 (playlist).**
 - Resume chia batch lại trên **các segment còn thiếu**, nên số batch và
   ranh giới batch lần chạy sau có thể khác lần đầu.
 
-### C5. [ĐÃ CHỐT 2026-09-17 — CHƯA IMPLEMENT] Đổi model giữa chừng không làm mất partial
+### C5. [ĐÃ IMPLEMENT — fix(translation) 2026-09-18] Đổi model giữa chừng không làm mất partial
 
-> **Chốt** (user: chọn cách tiện cho user): lưu `model` vào partial. Model
-> khác → in log rõ ràng ("partial dịch bằng A, đang dùng B — dịch lại từ
-> đầu") rồi bỏ partial. Lý do: một `translated.json` không được trộn hai
-> model, và key `translator` phải đúng sự thật. Partial cũ chưa có `model`
-> → coi như khớp (không mất tiến trình đang dở).
-
-Partial không gắn với model. Dịch 20 dòng bằng model A, chạy tiếp bằng
-model B → `translated.json` trộn hai model, key `translator` chỉ ghi
-model B. Chọn vậy để không mất tiến trình khi chỉ đổi tên tag model;
-nếu muốn chặt hơn thì thêm `model` vào fingerprint (vài dòng).
+`_load_partial` nhận thêm `translator_info` (provider+model **hiện tại**,
+không phải model output cuối — xem C3). Partial có key `translator` khác
+`translator_info` hiện tại → log
+`tiến trình dở dịch bằng <provider cũ>/<model cũ>, đang dùng <provider>/<model> — dịch lại từ đầu.`
+rồi trả `{}` (bỏ toàn bộ partial). Partial không có key `translator` (sinh
+ra trước fix này) → coi như khớp, resume bình thường như chốt ban đầu.
 
 ### C6. `--force` xoá `translated.json` ngay từ đầu
 
@@ -197,18 +225,21 @@ có test hồi quy.
 Hệ quả: `--force` bị ngắt thì **bản dịch cũ mất luôn** (chỉ còn partial
 mới). Chấp nhận vì bạn đã yêu cầu dịch lại.
 
-### C7. [ĐÃ CHỐT 2026-09-17 — CHƯA IMPLEMENT] Transcribe lại sau khi đã dịch → không phát hiện
+### C7. [ĐÃ IMPLEMENT — fix(translation) 2026-09-18] Transcribe lại sau khi đã dịch → tự dịch lại
 
-> **Chốt** (user: chọn cách tiện cho user): thêm `transcript_sha256` vào
-> `translated.json`. Hash khác transcript hiện tại → **tự dịch lại** (có
-> log), không SKIP. File cũ chưa có hash → SKIP như trước. Đổi model trong
-> config khi `translated.json` đã xong thì vẫn SKIP (dịch lại tốn thời
-> gian, phải chủ động `--force`).
+Đầu `translate_transcript`, khi `translated.json` tồn tại và không
+`force`: không có `transcript_sha256` (file cũ) hoặc transcript không còn
+tồn tại → SKIP như cũ (không có gì để so sánh). Có hash và khác hash hiện
+tại của `transcript.json` → log
+`transcript đã thay đổi kể từ lần dịch — dịch lại từ đầu.` rồi xử lý y hệt
+`force=True` (xoá `translated.json` + partial, dịch lại toàn bộ). Hash
+khớp thì xét tiếp `failed_ids` như C3. Đổi model trong config khi
+`translated.json` đã xong (hash khớp, `failed_ids` rỗng) thì vẫn SKIP —
+đúng như chốt ban đầu, không tự dịch lại chỉ vì đổi model.
 
-`translated.json` đã có thì SKIP, không so với transcript hiện tại. Nếu
-chạy `transcribe --force` (vd sửa `--source-lang`) mà quên `translate
---force`, CP4 sẽ đọc bản dịch của transcript cũ. Có thể lưu hash
-transcript vào `translated.json` để cảnh báo — chưa làm vì sẽ đổi schema.
+Đã kiểm chứng bằng chạy thật (không chỉ unit test): sửa tay một
+`source_text` trong `transcript.json` của bản sao rồi chạy lại `translate`
+→ đúng in log "transcript đã thay đổi" và dịch lại đủ 58 segment.
 
 ### C8. Ghi file atomic
 
