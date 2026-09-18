@@ -22,6 +22,7 @@ from app import cli
 from app.audio.ffmpeg import AudioExtractionError
 from app.transcription.whisper import Segment, TranscriptionError, TranscriptResult
 from app.translation.translate import TranslatedSegment, TranslationResult
+from app.tts.synthesize import TTSResult
 from app.youtube.download import EpisodeInfo, VideoDownloadError
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -29,11 +30,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 class TestCliHelp(unittest.TestCase):
     def _run(self, *args: str) -> subprocess.CompletedProcess[str]:
+        # CP4: encoding="utf-8" ép rõ — subprocess con in UTF-8 (help text có
+        # tiếng Việt), nhưng mặc định `text=True` decode theo locale của máy
+        # (cp1252 trên Windows) nên ngẫu nhiên vỡ UnicodeDecodeError tuỳ nội
+        # dung help text dài ngắn thế nào (thêm subcommand `tts` là lộ ra).
         return subprocess.run(
             [sys.executable, "-m", "app", *args],
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=False,
         )
 
@@ -240,6 +246,75 @@ class TestTranslateSubcommand(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("batchsize", fake_stderr.getvalue())
+
+
+class TestTTSSubcommand(unittest.TestCase):
+    def _result(self, skipped: bool = False, failed_ids: list[int] | None = None) -> TTSResult:
+        return TTSResult(
+            manifest_path=Path("output/ep/tts/manifest.json"),
+            synthesized_ids=[1],
+            cached_ids=[],
+            empty_ids=[],
+            failed_ids=failed_ids or [],
+            skipped=skipped,
+        )
+
+    def test_tts_uses_config_and_cli_overrides(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "c.yaml"
+            config_path.write_text(
+                "tts:\n  voice: from-config\n  concurrency: 2\n", encoding="utf-8"
+            )
+            with (
+                patch(
+                    "app.tts.synthesize.synthesize_translation", return_value=self._result()
+                ) as mock_synth,
+                patch("app.tts.create_tts_engine") as mock_create_engine,
+                patch("sys.stdout", new_callable=StringIO),
+            ):
+                exit_code = cli.main(
+                    ["tts", "output/ep", "--config", str(config_path), "--voice", "from-cli"]
+                )
+
+        self.assertEqual(exit_code, 0)
+        tconfig_used = mock_create_engine.call_args.args[0]
+        self.assertEqual(tconfig_used.voice, "from-cli")
+        self.assertEqual(tconfig_used.concurrency, 2)
+        self.assertEqual(mock_synth.call_args.kwargs["concurrency"], 2)
+
+    def test_tts_skip_message(self) -> None:
+        with (
+            patch("app.tts.synthesize.synthesize_translation", return_value=self._result(True)),
+            patch("app.tts.create_tts_engine"),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["tts", "output/ep"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("SKIP", fake_stdout.getvalue())
+
+    def test_tts_invalid_rate_errors(self) -> None:
+        with patch("sys.stderr", new_callable=StringIO) as fake_stderr:
+            exit_code = cli.main(["tts", "output/ep", "--rate=bad"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("rate", fake_stderr.getvalue())
+
+    def test_tts_warns_on_failed_ids_but_exits_zero(self) -> None:
+        with (
+            patch(
+                "app.tts.synthesize.synthesize_translation",
+                return_value=self._result(failed_ids=[7]),
+            ),
+            patch("app.tts.create_tts_engine"),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["tts", "output/ep"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("CẢNH BÁO", output)
+        self.assertIn("7", output)
 
 
 if __name__ == "__main__":

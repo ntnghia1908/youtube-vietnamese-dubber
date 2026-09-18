@@ -22,3 +22,12 @@ translation:
   num_ctx: 8192          # context window của Ollama; nhỏ quá thì prompt bị cắt im lặng
   timeout_seconds: 300
   think: false           # tắt chế độ suy nghĩ của qwen3; để null nếu model không hỗ trợ
+
+tts:
+  provider: edge                # hiện chỉ có edge (edge-tts, miễn phí, không cần API key)
+  voice: vi-VN-HoaiMyNeural     # xem toàn bộ voice: `edge-tts --list-voices`
+  rate: "+0%"                   # tốc độ đọc, dạng +N% / -N% (bắt buộc có dấu %)
+  volume: "+0%"                 # âm lượng, cùng định dạng
+  concurrency: 4                # số segment tổng hợp song song
+  max_attempts: 3               # số lần thử mỗi segment trước khi đánh dấu lỗi
+  timeout_seconds: 60           # timeout nhận audio cho mỗi segment

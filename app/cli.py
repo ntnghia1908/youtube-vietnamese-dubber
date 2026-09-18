@@ -3,7 +3,8 @@
 Checkpoint 1: subcommand ``download`` (tải một video YouTube).
 Checkpoint 2: subcommand ``transcribe`` (trích audio + speech-to-text).
 Checkpoint 3: subcommand ``translate`` (dịch transcript) + ``--config``.
-Các subcommand khác (tts, render, dub, playlist, ...) sẽ được thêm dần ở
+Checkpoint 4: subcommand ``tts`` (tổng hợp giọng nói bằng edge-tts).
+Các subcommand khác (render, dub, playlist, ...) sẽ được thêm dần ở
 các checkpoint tiếp theo, xem docs/IMPLEMENTATION_PLAN.md.
 
 Flag CLI để mặc định ``None`` để phân biệt "không truyền" với "truyền
@@ -19,7 +20,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from app import __version__
-from app.config import AppConfig, ConfigError, load_config
+from app.config import AppConfig, ConfigError, load_config, validate_rate_or_volume
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,6 +133,40 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Dịch lại từ đầu dù translated.json (hoặc tiến trình dịch dở) đã tồn tại.",
+    )
+
+    tts_parser = subparsers.add_parser(
+        "tts",
+        parents=[common],
+        help="Tổng hợp giọng nói tiếng Việt (edge-tts) từ translated.json, tạo tts/*.mp3.",
+    )
+    tts_parser.add_argument(
+        "episode_dir",
+        help="Thư mục episode đã có translated.json (tạo bởi subcommand `translate`).",
+    )
+    tts_parser.add_argument(
+        "--voice",
+        default=None,
+        help="Tên voice edge-tts (vd vi-VN-HoaiMyNeural). Mặc định: `tts.voice` trong config.",
+    )
+    tts_parser.add_argument(
+        "--rate",
+        default=None,
+        help=(
+            "Tốc độ đọc, dạng +N%%/-N%% (vd +20%%). Mặc định: `tts.rate` trong config. "
+            "Giá trị âm phải dùng dạng --rate=-10%% (không phải --rate -10%%), "
+            "nếu không argparse hiểu nhầm thành một flag khác."
+        ),
+    )
+    tts_parser.add_argument(
+        "--volume",
+        default=None,
+        help="Âm lượng, dạng +N%%/-N%%. Mặc định: `tts.volume` trong config. Dùng --volume=-10%% cho giá trị âm.",
+    )
+    tts_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Tổng hợp lại toàn bộ segment dù tts/manifest.json đã đủ.",
     )
 
     return parser
@@ -254,10 +289,69 @@ def _cmd_translate(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
+def _cmd_tts(args: argparse.Namespace, config: AppConfig) -> int:
+    from app.translation.translate import TRANSLATED_FILENAME
+    from app.tts import create_tts_engine
+    from app.tts.base import TTSError
+    from app.tts.synthesize import TTS_DIRNAME, synthesize_translation
+
+    overrides = {
+        key: value
+        for key, value in {
+            "voice": args.voice,
+            "rate": args.rate,
+            "volume": args.volume,
+        }.items()
+        if value is not None
+    }
+    tconfig = replace(config.tts, **overrides)
+    for key in ("rate", "volume"):
+        try:
+            validate_rate_or_volume("tts", key, getattr(tconfig, key))
+        except ConfigError as exc:
+            print(f"[tts] LỖI: {exc}", file=sys.stderr)
+            return 1
+
+    episode_dir = Path(args.episode_dir)
+    try:
+        engine = create_tts_engine(tconfig)
+        result = synthesize_translation(
+            episode_dir / TRANSLATED_FILENAME,
+            episode_dir / TTS_DIRNAME,
+            engine,
+            max_attempts=tconfig.max_attempts,
+            concurrency=tconfig.concurrency,
+            force=args.force,
+            # flush: giống _cmd_translate — playlist chạy hàng giờ, log phải
+            # thấy ngay cả khi stdout bị pipe/ghi ra file.
+            log=lambda message: print(message, flush=True),
+        )
+    except TTSError as exc:
+        print(f"[tts] LỖI: {exc}", file=sys.stderr)
+        return 1
+
+    if result.skipped:
+        print("[tts] SKIP: tts/ đã đủ (dùng --force để tạo lại).")
+    print(f"[tts] manifest    : {result.manifest_path}")
+    print(f"[tts] tổng hợp    : {len(result.synthesized_ids)}")
+    print(f"[tts] cache       : {len(result.cached_ids)}")
+    print(f"[tts] rỗng        : {len(result.empty_ids)}")
+    if result.failed_ids:
+        # Giống C3 của CP3: một segment lỗi không được chặn cả episode,
+        # nhưng vẫn phải cảnh báo rõ để người dùng biết chạy lại lệnh.
+        ids = ", ".join(str(i) for i in result.failed_ids)
+        print(
+            f"[tts] CẢNH BÁO: {len(result.failed_ids)} segment lỗi (id {ids}) — "
+            "chạy lại lệnh để thử lại."
+        )
+    return 0
+
+
 _COMMANDS = {
     "download": _cmd_download,
     "transcribe": _cmd_transcribe,
     "translate": _cmd_translate,
+    "tts": _cmd_tts,
 }
 
 

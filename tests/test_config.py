@@ -59,6 +59,47 @@ class TestParseConfig(unittest.TestCase):
     def test_temperature_accepts_int(self) -> None:
         self.assertEqual(parse_config({"translation": {"temperature": 0}}).translation.temperature, 0)
 
+    def test_tts_section_defaults(self) -> None:
+        config = parse_config(None)
+        self.assertEqual(config.tts.provider, "edge")
+        self.assertEqual(config.tts.voice, "vi-VN-HoaiMyNeural")
+        self.assertEqual(config.tts.rate, "+0%")
+        self.assertEqual(config.tts.volume, "+0%")
+        self.assertEqual(config.tts.concurrency, 4)
+        self.assertEqual(config.tts.max_attempts, 3)
+        self.assertEqual(config.tts.timeout_seconds, 60)
+
+    def test_tts_section_reads_values(self) -> None:
+        config = parse_config(
+            {"tts": {"voice": "vi-VN-NamMinhNeural", "rate": "+20%", "concurrency": 8}}
+        )
+        self.assertEqual(config.tts.voice, "vi-VN-NamMinhNeural")
+        self.assertEqual(config.tts.rate, "+20%")
+        self.assertEqual(config.tts.concurrency, 8)
+
+    def test_tts_rejects_unknown_key(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "voise"):
+            parse_config({"tts": {"voise": "x"}})
+
+    def test_tts_rejects_bad_rate_format(self) -> None:
+        with self.assertRaises(ConfigError):
+            parse_config({"tts": {"rate": "0%"}})
+
+    def test_tts_rejects_bad_volume_format(self) -> None:
+        with self.assertRaises(ConfigError):
+            parse_config({"tts": {"volume": "fast"}})
+
+    def test_tts_accepts_negative_rate(self) -> None:
+        self.assertEqual(parse_config({"tts": {"rate": "-10%"}}).tts.rate, "-10%")
+
+    def test_tts_rejects_non_positive_concurrency(self) -> None:
+        with self.assertRaises(ConfigError):
+            parse_config({"tts": {"concurrency": 0}})
+
+    def test_tts_rejects_unsupported_provider(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "provider"):
+            parse_config({"tts": {"provider": "azure"}})
+
 
 class TestLoadConfig(unittest.TestCase):
     def test_explicit_missing_path_errors(self) -> None:
@@ -84,6 +125,8 @@ class TestLoadConfig(unittest.TestCase):
         config = load_config(example)
         self.assertEqual(config.translation.provider, "ollama")
         self.assertTrue(config.translation.model)
+        self.assertEqual(config.tts.provider, "edge")
+        self.assertEqual(config.tts.voice, "vi-VN-HoaiMyNeural")
 
 
 if __name__ == "__main__":

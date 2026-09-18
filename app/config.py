@@ -5,13 +5,15 @@ code. Riêng tên model dịch KHÔNG có mặc định (plan §10: tên model l
 chỉ là config, không hard-code trong source) — thiếu thì báo lỗi rõ ràng
 lúc tạo translator.
 
-Chỉ khai báo các section đã có code đọc (``whisper``, ``translation``).
+Chỉ khai báo các section đã có code đọc (``whisper``, ``translation``,
+``tts``).
 Key lạ bị từ chối thay vì bỏ qua: gõ nhầm ``batchsize`` mà lặng lẽ dùng
 mặc định thì rất khó phát hiện khi playlist đã chạy vài giờ.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,11 +50,23 @@ class TranslationConfig:
 
 
 @dataclass(frozen=True)
+class TTSConfig:
+    provider: str = "edge"
+    voice: str = "vi-VN-HoaiMyNeural"
+    rate: str = "+0%"
+    volume: str = "+0%"
+    concurrency: int = 4
+    max_attempts: int = 3
+    timeout_seconds: float = 60.0
+
+
+@dataclass(frozen=True)
 class AppConfig:
     workspace: Path = Path("output")
     target_language: str = "vi"
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     translation: TranslationConfig = field(default_factory=TranslationConfig)
+    tts: TTSConfig = field(default_factory=TTSConfig)
 
 
 # Kiểu hợp lệ cho từng key. ``None`` trong tuple = cho phép giá trị null.
@@ -74,6 +88,32 @@ _TRANSLATION_TYPES: dict[str, tuple[type | None, ...]] = {
     "think": (bool, None),
 }
 _SUPPORTED_PROVIDERS = ("ollama",)
+_TTS_TYPES: dict[str, tuple[type | None, ...]] = {
+    "provider": (str,),
+    "voice": (str,),
+    "rate": (str,),
+    "volume": (str,),
+    "concurrency": (int,),
+    "max_attempts": (int,),
+    "timeout_seconds": (int, float),
+}
+_SUPPORTED_TTS_PROVIDERS = ("edge",)
+# vd "+0%", "-10%", "+100%". YAML `rate: +0%` không quote vẫn parse ra str,
+# nhưng thiếu dấu % (`rate: 0%` thành số 0 hoặc thiếu dấu +/-) là lỗi hay gặp.
+_RATE_VOLUME_RE = re.compile(r"^[+-]\d{1,3}%$")
+
+
+def validate_rate_or_volume(section: str, key: str, value: str) -> None:
+    """Kiểm tra ``rate``/``volume`` đúng định dạng edge-tts (``+N%``/``-N%``).
+
+    Dùng chung cho cả ``config.yaml`` (``parse_config``) và flag CLI
+    (``--rate``/``--volume``) để cùng một thông báo lỗi.
+    """
+    if not _RATE_VOLUME_RE.match(value):
+        raise ConfigError(
+            f"`{section}.{key}` phải có dạng \"+N%\" hoặc \"-N%\" (vd \"+0%\", \"-10%\"), "
+            f"đang là {value!r}."
+        )
 
 
 def _check_section(
@@ -117,7 +157,7 @@ def parse_config(data: Any) -> AppConfig:
     if not isinstance(data, dict):
         raise ConfigError("File config phải là một mapping ở cấp cao nhất.")
 
-    top_level = {"workspace", "target_language", "whisper", "translation"}
+    top_level = {"workspace", "target_language", "whisper", "translation", "tts"}
     unknown = sorted(set(data) - top_level)
     if unknown:
         raise ConfigError(
@@ -152,6 +192,18 @@ def parse_config(data: Any) -> AppConfig:
     if translation.context_size < 0:
         raise ConfigError("`translation.context_size` không được âm.")
     kwargs["translation"] = translation
+
+    tts = TTSConfig(**_check_section(data.get("tts"), "tts", _TTS_TYPES))
+    if tts.provider not in _SUPPORTED_TTS_PROVIDERS:
+        raise ConfigError(
+            f"`tts.provider` không hỗ trợ: {tts.provider!r}. "
+            f"Hiện có: {', '.join(_SUPPORTED_TTS_PROVIDERS)}."
+        )
+    validate_rate_or_volume("tts", "rate", tts.rate)
+    validate_rate_or_volume("tts", "volume", tts.volume)
+    for key in ("concurrency", "max_attempts", "timeout_seconds"):
+        _positive("tts", key, getattr(tts, key))
+    kwargs["tts"] = tts
 
     return AppConfig(**kwargs)
 
