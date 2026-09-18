@@ -104,11 +104,11 @@ Ba cái bẫy đã mất thời gian vì nó:
 
 ## Việc tiếp theo
 
-**Checkpoint 5 — Timing normalization**: `alignment/timing.py`, đo độ dài
-từng `tts/*.mp3`, so với slot gốc (`end - start`), co giãn khi hợp lý,
-đánh dấu câu quá dài, xuất `normalized.json` + report
-(normal/stretched/too_long). Đọc trước mục A của
-`docs/decisions/checkpoint-4.md`: chỉ lấy audio từ entry `status: "ok"`
-trong `tts/manifest.json` (không glob), segment có thể không có file; và
-chốt câu hỏi `[CẦN DUYỆT]` A2 (ghi `duration` vào manifest ở CP4 hay
-CP5 tự ffprobe).
+**Checkpoint 6 — Build voice track + render**: đặt audio từng segment vào
+đúng timestamp thành `voice_track.wav`, mix với audio gốc, giữ video
+stream, xuất `output_vi.mp4`. Đọc trước mục A của
+`docs/decisions/checkpoint-5.md`: chỉ ghép segment có `audio != null` từ
+`normalized.json` (dùng `audio`, không dùng `tts_file`); chốt cách xử lý
+`missing` (chèn im lặng hay báo lỗi) và `too_long` còn `overflow > 0`
+(đè sang câu sau hay dời). Nghe thử `timing/000008.wav` (tempo 1.25) để
+quyết có hạ `max_tempo` không.
