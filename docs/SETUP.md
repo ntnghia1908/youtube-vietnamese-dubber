@@ -64,7 +64,14 @@ ollama pull qwen3:8b       # model mac dinh theo docs/IMPLEMENTATION_PLAN.md muc
 ollama list                # phai thay qwen3:8b trong danh sach
 ```
 
-### A5. GPU NVIDIA — tuỳ chọn, nhưng đây thường là lý do đổi sang máy mạnh
+### A5. Kết nối mạng cho TTS — cần cho Checkpoint 4 trở đi
+
+Subcommand `tts` gọi dịch vụ giọng đọc của Microsoft Edge qua WebSocket
+(package `edge-tts`, miễn phí, không cần đăng ký/API key) — khác với
+Ollama, đây **không phải** dịch vụ chạy local nên máy cần có mạng ra
+ngoài lúc chạy `tts`. Không cần cài đặt gì thêm ngoài `pip install -e .`.
+
+### A6. GPU NVIDIA — tuỳ chọn, nhưng đây thường là lý do đổi sang máy mạnh
 
 `faster-whisper` chạy nhanh hơn rất nhiều trên GPU. Cần:
 
@@ -185,7 +192,8 @@ Kiểm chứng:
 .venv/Scripts/python.exe -m unittest discover -s tests
 ```
 
-Kỳ vọng: **toàn bộ test pass** (35 test tính tới Checkpoint 2).
+Kỳ vọng: **toàn bộ test pass** (số lượng tăng dần theo mỗi checkpoint —
+xem dòng cuối output, vd `Ran 162 tests ... OK`).
 
 > ⚠️ Test pass **không** chứng minh pipeline chạy được — toàn bộ test
 > đều mock `ffmpeg`, `yt-dlp` và `faster-whisper`. Đã từng có 29/29 test
@@ -240,7 +248,7 @@ của Whisper từng nhận nhầm một video tiếng Trung thành `en` (confid
 | `Output file does not contain any stream` | `source.mp4` không có audio track. Tải lại bằng `--force` |
 | `UnicodeEncodeError` khi in tiếng Việt/tiếng Trung | Console Windows dùng cp1252. Đặt `PYTHONIOENCODING=utf-8`. Chạy qua `python -m app` thì không bị |
 | `ModuleNotFoundError: faster_whisper` | Đang dùng `python` trần thay vì python trong `.venv` |
-| Lỗi cuDNN/CUDA khi `--device cuda` (vd `cublas64_12.dll is not found`) | Thiếu CUDA Toolkit 12.x hoặc cuDNN 9 — có driver/GPU không có nghĩa là đã có hai thứ này. Cài theo mục A5. Tạm thời dùng `--device cpu` trong lúc chờ cài |
+| Lỗi cuDNN/CUDA khi `--device cuda` (vd `cublas64_12.dll is not found`) | Thiếu CUDA Toolkit 12.x hoặc cuDNN 9 — có driver/GPU không có nghĩa là đã có hai thứ này. Cài theo mục A6. Tạm thời dùng `--device cpu` trong lúc chờ cài |
 
 ---
 
@@ -255,3 +263,8 @@ Môi trường được coi là sẵn sàng khi **tất cả** dòng dưới đ�
 - [ ] Smoke test B4 tạo ra `source.mp4` **có audio stream**
 - [ ] `transcript.json` đọc được, đúng ngôn ngữ
 - [ ] (CP3 trở đi) `ollama list` thấy model dịch
+- [ ] (CP4 trở đi) máy có mạng ra ngoài; `python -m app tts <episode_dir>`
+      tạo được `tts/*.mp3` nghe được (xem mục A5)
+- [ ] (CP5 trở đi) `python -m app normalize <episode_dir>` tạo được
+      `normalized.json`; report `too_long` không bất thường so với số
+      segment
