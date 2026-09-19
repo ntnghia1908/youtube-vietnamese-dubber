@@ -8,8 +8,10 @@ Checkpoint 5: subcommand ``normalize`` (chuẩn hoá timing tts vs slot gốc).
 Checkpoint 6: subcommand ``render`` (dựng voice_track.wav + mix ra output_vi.mp4).
 Checkpoint 6.5: subcommand ``glossary`` (tạo nháp glossary.yaml bằng model) +
 ``translate --glossary`` (glossary dùng chung, gộp với <episode>/glossary.yaml).
-Các subcommand khác (dub, playlist, ...) sẽ được thêm dần ở
-các checkpoint tiếp theo, xem docs/IMPLEMENTATION_PLAN.md.
+Checkpoint 7: subcommand ``dub`` (end-to-end: download -> transcribe ->
+translate -> tts -> normalize -> render từ một URL, gọi thẳng các hàm stage).
+Các subcommand khác (playlist, ...) sẽ được thêm dần ở các checkpoint tiếp
+theo, xem docs/IMPLEMENTATION_PLAN.md.
 
 Flag CLI để mặc định ``None`` để phân biệt "không truyền" với "truyền
 đúng giá trị mặc định": không truyền thì lấy từ config.
@@ -271,6 +273,56 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Dựng lại voice_track.wav và mux lại output_vi.mp4 dù đã khớp.",
+    )
+
+    dub_parser = subparsers.add_parser(
+        "dub",
+        parents=[common],
+        help=(
+            "Chạy toàn bộ pipeline cho một video (download -> transcribe -> translate -> "
+            "tts -> normalize -> render), tự resume và tự sửa lỗi tạm thời."
+        ),
+    )
+    dub_parser.add_argument("url", help="URL video YouTube cần lồng tiếng.")
+    dub_parser.add_argument(
+        "--workspace",
+        default=None,
+        help="Thư mục gốc chứa các episode (mặc định: `workspace` trong config, hoặc output).",
+    )
+    dub_parser.add_argument(
+        "--source-lang",
+        default="auto",
+        help=(
+            "Mã ngôn ngữ gốc của video (vd zh, en, ja). Mặc định: auto (để Whisper tự nhận "
+            "dạng). Nên ép cứng nếu auto-detect đoán sai (vd zh bị nhận nhầm thành en)."
+        ),
+    )
+    dub_parser.add_argument(
+        "--glossary",
+        default=None,
+        help=(
+            "Glossary dùng chung (vd cả series), gộp với <episode>/glossary.yaml (file của tập "
+            "luôn tự nhận nếu có). Mặc định: `translation.glossary` trong config."
+        ),
+    )
+    dub_parser.add_argument(
+        "--original-volume",
+        type=float,
+        default=None,
+        help="Volume audio gốc khi mix, 0.0–1.0. Mặc định: `mixing.original_volume` trong config, hoặc 0.30.",
+    )
+    dub_parser.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="Cho phép segment thiếu audio sau khi đã tự thử sửa: chèn im lặng thay vì báo lỗi.",
+    )
+    dub_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Làm lại MỌI stage dù artifact đã có (tải lại video, chạy lại Whisper, dịch lại, "
+            "tổng hợp giọng lại) — tốn thời gian và gọi lại AI/mạng, chỉ dùng khi thật sự cần."
+        ),
     )
 
     return parser
@@ -621,6 +673,71 @@ def _cmd_render(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
+def _cmd_dub(args: argparse.Namespace, config: AppConfig) -> int:
+    # Import cục bộ: kéo theo yt-dlp/faster-whisper/Ollama/edge-tts, các
+    # subcommand khác không cần tới.
+    from app.pipeline.dub import DubError, DubOptions, run_dub
+
+    workspace = Path(args.workspace) if args.workspace else config.workspace
+    source_lang = None if args.source_lang == "auto" else args.source_lang
+    shared_glossary = args.glossary if args.glossary is not None else config.translation.glossary
+    original_volume = (
+        args.original_volume if args.original_volume is not None else config.mixing.original_volume
+    )
+    try:
+        validate_mixing(original_volume, config.mixing.speech_volume, config.mixing.max_shift_seconds)
+    except ConfigError as exc:
+        print(f"[dub] LỖI: {exc}", file=sys.stderr)
+        return 1
+
+    options = DubOptions(
+        workspace=workspace,
+        source_lang=source_lang,
+        shared_glossary=Path(shared_glossary) if shared_glossary else None,
+        original_volume=original_volume,
+        allow_missing=args.allow_missing,
+        force=args.force,
+    )
+    try:
+        result = run_dub(
+            args.url,
+            config,
+            options,
+            # flush: giống _cmd_translate/_cmd_tts — playlist/video dài chạy
+            # hàng giờ, log phải thấy ngay cả khi stdout bị pipe/ghi ra file.
+            log=lambda message: print(message, flush=True),
+        )
+    except DubError as exc:
+        print(f"[dub] LỖI {exc}", file=sys.stderr)
+        return 1
+
+    print(f"[dub] episode    : {result.episode_dir}")
+    print(f"[dub] ngôn ngữ   : {result.source_language} -> {config.target_language}")
+    print(f"[dub] segments   : {result.segments}")
+    too_long_suffix = (
+        f" (id {', '.join(str(i) for i in result.too_long_ids)})" if result.too_long_ids else ""
+    )
+    print(f"[dub] too_long   : {len(result.too_long_ids)}{too_long_suffix}")
+    print(f"[dub] sửa lại    : {result.repair_rounds_used} vòng")
+    total_seconds = sum(result.stage_seconds.values())
+    times = ", ".join(f"{name} {seconds:.1f}s" for name, seconds in result.stage_seconds.items())
+    print(f"[dub] thời gian  : {times} (tổng {total_seconds:.1f}s)")
+    print(f"[dub] output     : {result.output_path}")
+    if result.translate_failed_ids:
+        ids = ", ".join(str(i) for i in result.translate_failed_ids)
+        print(
+            f"[dub] CẢNH BÁO: {len(result.translate_failed_ids)} segment dịch lỗi (id {ids}) — "
+            "các câu này im lặng trong output."
+        )
+    if result.missing_ids:
+        ids = ", ".join(str(i) for i in result.missing_ids)
+        print(
+            f"[dub] CẢNH BÁO: {len(result.missing_ids)} segment thiếu audio (id {ids}) "
+            "được thay bằng im lặng."
+        )
+    return 0
+
+
 _COMMANDS = {
     "download": _cmd_download,
     "transcribe": _cmd_transcribe,
@@ -629,6 +746,7 @@ _COMMANDS = {
     "tts": _cmd_tts,
     "normalize": _cmd_normalize,
     "render": _cmd_render,
+    "dub": _cmd_dub,
 }
 
 

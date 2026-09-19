@@ -206,6 +206,30 @@ class TestParseConfig(unittest.TestCase):
                 with self.subTest(key=key, value=value), self.assertRaises(ConfigError):
                     parse_config({"mixing": {key: value}})
 
+    def test_pipeline_section_default(self) -> None:
+        self.assertEqual(parse_config(None).pipeline.repair_rounds, 2)
+
+    def test_pipeline_section_reads_zero(self) -> None:
+        config = parse_config({"pipeline": {"repair_rounds": 0}})
+        self.assertEqual(config.pipeline.repair_rounds, 0)
+
+    def test_pipeline_rejects_negative_repair_rounds(self) -> None:
+        with self.assertRaises(ConfigError):
+            parse_config({"pipeline": {"repair_rounds": -1}})
+
+    def test_pipeline_rejects_wrong_type(self) -> None:
+        for value in ("2", True, 1.5):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                parse_config({"pipeline": {"repair_rounds": value}})
+
+    def test_pipeline_rejects_unknown_key(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "repair_roundz"):
+            parse_config({"pipeline": {"repair_roundz": 1}})
+
+    def test_unknown_section_message_lists_pipeline(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "pipeline"):
+            parse_config({"piplin": {}})
+
 
 class TestLoadConfig(unittest.TestCase):
     def test_explicit_missing_path_errors(self) -> None:

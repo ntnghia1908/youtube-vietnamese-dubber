@@ -21,6 +21,7 @@ from unittest.mock import patch
 from app import cli
 from app.audio.ffmpeg import AudioExtractionError
 from app.audio.render import RenderError, RenderResult
+from app.pipeline.dub import DubError, DubResult
 from app.transcription.whisper import Segment, TranscriptionError, TranscriptResult
 from app.translation.glossary import GlossaryError, parse_glossary
 from app.translation.glossary_draft import GlossaryDraftResult
@@ -820,6 +821,163 @@ class TestTranslateGlossaryOption(unittest.TestCase):
         self.assertIn("[translate] LỖI", err)
         self.assertIn("characterz", err)
         mock_translate.assert_not_called()
+
+
+class TestDubSubcommand(unittest.TestCase):
+    """CP7: subcommand ``dub`` (patch ``run_dub``, không chạy pipeline thật)."""
+
+    def _result(self, **overrides: object) -> DubResult:
+        base: dict[str, object] = dict(
+            episode_dir=Path("output/ep"),
+            output_path=Path("output/ep/output_vi.mp4"),
+            source_language="en",
+            segments=58,
+            translate_failed_ids=[],
+            missing_ids=[],
+            too_long_ids=[],
+            repair_rounds_used=0,
+            glossary_paths=[],
+            stage_seconds={
+                "download": 3.1,
+                "transcribe": 0.0,
+                "translate": 0.0,
+                "tts": 0.1,
+                "normalize": 0.2,
+                "render": 0.3,
+            },
+            skipped_stages=[],
+        )
+        base.update(overrides)
+        return DubResult(**base)  # type: ignore[arg-type]
+
+    def test_dub_help_lists_flags(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "app", "dub", "--help"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        for flag in (
+            "--workspace", "--source-lang", "--glossary",
+            "--original-volume", "--allow-missing", "--force", "--config",
+        ):
+            self.assertIn(flag, result.stdout)
+
+    def test_dub_parse_defaults(self) -> None:
+        parser = cli.build_parser()
+        args = parser.parse_args(["dub", "https://youtu.be/x"])
+        self.assertEqual(args.source_lang, "auto")
+        self.assertFalse(args.force)
+        self.assertFalse(args.allow_missing)
+
+    def test_dub_success_prints_summary(self) -> None:
+        with (
+            patch("app.pipeline.dub.run_dub", return_value=self._result()) as mock_run,
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["dub", "https://youtu.be/x"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("[dub] episode    :", output)
+        self.assertIn("en -> vi", output)
+        self.assertIn("[dub] segments   : 58", output)
+        self.assertIn("output_vi.mp4", output)
+        mock_run.assert_called_once()
+        self.assertEqual(mock_run.call_args.args[0], "https://youtu.be/x")
+
+    def test_dub_flags_override_config(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "c.yaml"
+            config_path.write_text(
+                "translation:\n  model: m\n  glossary: from-config.yaml\n"
+                "mixing:\n  original_volume: 0.2\n",
+                encoding="utf-8",
+            )
+            with (
+                patch("app.pipeline.dub.run_dub", return_value=self._result()) as mock_run,
+                patch("sys.stdout", new_callable=StringIO),
+            ):
+                exit_code = cli.main(
+                    [
+                        "dub", "https://youtu.be/x",
+                        "--config", str(config_path),
+                        "--workspace", "output/custom",
+                        "--original-volume", "0.5",
+                        "--glossary", "shared.yaml",
+                        "--source-lang", "auto",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        options = mock_run.call_args.args[2]
+        self.assertEqual(options.workspace, Path("output/custom"))
+        self.assertEqual(options.original_volume, 0.5)
+        self.assertEqual(options.shared_glossary, Path("shared.yaml"))
+        self.assertIsNone(options.source_lang)
+
+    def test_dub_source_lang_flag_passthrough(self) -> None:
+        with (
+            patch("app.pipeline.dub.run_dub", return_value=self._result()) as mock_run,
+            patch("sys.stdout", new_callable=StringIO),
+        ):
+            cli.main(["dub", "https://youtu.be/x", "--source-lang", "zh"])
+
+        options = mock_run.call_args.args[2]
+        self.assertEqual(options.source_lang, "zh")
+
+    def test_dub_invalid_original_volume_errors_without_calling_run_dub(self) -> None:
+        with (
+            patch("app.pipeline.dub.run_dub") as mock_run,
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(["dub", "https://youtu.be/x", "--original-volume", "1.5"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[dub] LỖI", fake_stderr.getvalue())
+        mock_run.assert_not_called()
+
+    def test_dub_error_exits_one(self) -> None:
+        with (
+            patch("app.pipeline.dub.run_dub", side_effect=DubError("translate", "boom")),
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(["dub", "https://youtu.be/x"])
+
+        self.assertEqual(exit_code, 1)
+        output = fake_stderr.getvalue()
+        self.assertIn("[dub] LỖI", output)
+        self.assertIn("boom", output)
+
+    def test_dub_warns_on_translate_failed_ids(self) -> None:
+        with (
+            patch("app.pipeline.dub.run_dub", return_value=self._result(translate_failed_ids=[5])),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["dub", "https://youtu.be/x"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("CẢNH BÁO", output)
+        self.assertIn("5", output)
+
+    def test_dub_warns_on_missing_ids(self) -> None:
+        with (
+            patch(
+                "app.pipeline.dub.run_dub",
+                return_value=self._result(missing_ids=[7], repair_rounds_used=2),
+            ),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["dub", "https://youtu.be/x", "--allow-missing"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("CẢNH BÁO", output)
+        self.assertIn("7", output)
 
 
 if __name__ == "__main__":

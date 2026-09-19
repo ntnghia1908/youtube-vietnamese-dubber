@@ -72,6 +72,13 @@ class TimingConfig:
 
 
 @dataclass(frozen=True)
+class PipelineConfig:
+    # `dub` (CP7): số vòng tối đa chạy lại translate (câu dịch lỗi) và
+    # tts+normalize (thiếu audio) trước khi render; 0 = không thử lại.
+    repair_rounds: int = 2
+
+
+@dataclass(frozen=True)
 class MixingConfig:
     # Volume audio gốc khi mix (plan §15: 25–35%). 0 = tắt hẳn audio gốc.
     original_volume: float = 0.30
@@ -91,6 +98,7 @@ class AppConfig:
     tts: TTSConfig = field(default_factory=TTSConfig)
     timing: TimingConfig = field(default_factory=TimingConfig)
     mixing: MixingConfig = field(default_factory=MixingConfig)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
 
 
 # Kiểu hợp lệ cho từng key. ``None`` trong tuple = cho phép giá trị null.
@@ -132,6 +140,9 @@ _MIXING_TYPES: dict[str, tuple[type | None, ...]] = {
     "original_volume": (int, float),
     "speech_volume": (int, float),
     "max_shift_seconds": (int, float),
+}
+_PIPELINE_TYPES: dict[str, tuple[type | None, ...]] = {
+    "repair_rounds": (int,),
 }
 # vd "+0%", "-10%", "+100%". YAML `rate: +0%` không quote vẫn parse ra str,
 # nhưng thiếu dấu % (`rate: 0%` thành số 0 hoặc thiếu dấu +/-) là lỗi hay gặp.
@@ -233,7 +244,16 @@ def parse_config(data: Any) -> AppConfig:
     if not isinstance(data, dict):
         raise ConfigError("File config phải là một mapping ở cấp cao nhất.")
 
-    top_level = {"workspace", "target_language", "whisper", "translation", "tts", "timing", "mixing"}
+    top_level = {
+        "workspace",
+        "target_language",
+        "whisper",
+        "translation",
+        "tts",
+        "timing",
+        "mixing",
+        "pipeline",
+    }
     unknown = sorted(set(data) - top_level)
     if unknown:
         raise ConfigError(
@@ -288,6 +308,13 @@ def parse_config(data: Any) -> AppConfig:
     mixing = MixingConfig(**_check_section(data.get("mixing"), "mixing", _MIXING_TYPES))
     validate_mixing(mixing.original_volume, mixing.speech_volume, mixing.max_shift_seconds)
     kwargs["mixing"] = mixing
+
+    pipeline = PipelineConfig(**_check_section(data.get("pipeline"), "pipeline", _PIPELINE_TYPES))
+    if pipeline.repair_rounds < 0:
+        raise ConfigError(
+            f"`pipeline.repair_rounds` không được âm (đang là {pipeline.repair_rounds})."
+        )
+    kwargs["pipeline"] = pipeline
 
     return AppConfig(**kwargs)
 
