@@ -22,6 +22,8 @@ from app import cli
 from app.audio.ffmpeg import AudioExtractionError
 from app.audio.render import RenderError, RenderResult
 from app.transcription.whisper import Segment, TranscriptionError, TranscriptResult
+from app.translation.glossary import GlossaryError, parse_glossary
+from app.translation.glossary_draft import GlossaryDraftResult
 from app.translation.translate import TranslatedSegment, TranslationResult
 from app.synchronization.timing import TimingError, TimingResult
 from app.tts.synthesize import TTSResult
@@ -559,6 +561,265 @@ class TestRenderSubcommand(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("[render] LỖI", fake_stderr.getvalue())
         self.assertIn("5, 6", fake_stderr.getvalue())
+
+
+class TestGlossarySubcommand(unittest.TestCase):
+    """CP6.5: subcommand ``glossary`` (patch ``draft_glossary_file``, không gọi model)."""
+
+    def _result(self, skipped: bool = False, backup: Path | None = None) -> GlossaryDraftResult:
+        return GlossaryDraftResult(
+            glossary_path=Path("output/ep/glossary.yaml"),
+            glossary=parse_glossary(
+                {
+                    "characters": [{"name": "A"}, {"name": "B"}],
+                    "address": [
+                        {"speaker": "A", "listener": "B", "self": "con", "other": "ba"},
+                        {"speaker": "B", "listener": "A", "self": "ba", "other": "con"},
+                    ],
+                }
+            ),
+            skipped=skipped,
+            backup_path=backup,
+        )
+
+    def test_glossary_help_runs(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "app", "glossary", "--help"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        for flag in ("--model", "--max-chars", "--force", "--config"):
+            self.assertIn(flag, result.stdout)
+
+    def test_glossary_prints_summary_and_draft_notice(self) -> None:
+        with (
+            patch("app.translation.glossary_draft.draft_glossary_file", return_value=self._result()),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["glossary", "output/ep", "--model", "m"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("[glossary] glossary   : ", output)
+        self.assertIn("[glossary] characters : 2", output)
+        self.assertIn("[glossary] address    : 2", output)
+        self.assertIn("[glossary] terms      : 0", output)
+        self.assertIn("[glossary] LƯU Ý", output)
+        self.assertIn("bản nháp", output)
+        self.assertIn("python -m app translate", output)
+        self.assertNotIn("SKIP", output)
+
+    def test_glossary_skip_message(self) -> None:
+        with (
+            patch(
+                "app.translation.glossary_draft.draft_glossary_file",
+                return_value=self._result(skipped=True),
+            ),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["glossary", "output/ep", "--model", "m"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn(
+            "[glossary] SKIP: glossary.yaml đã tồn tại (dùng --force để tạo lại; "
+            "bản cũ được lưu ở glossary.yaml.bak).",
+            output,
+        )
+        # Vẫn in bốn dòng tổng kết, nhưng không nhắc "bản nháp" vì không tạo mới.
+        self.assertIn("[glossary] characters : 2", output)
+        self.assertNotIn("LƯU Ý", output)
+
+    def test_glossary_force_prints_backup_path(self) -> None:
+        with (
+            patch(
+                "app.translation.glossary_draft.draft_glossary_file",
+                return_value=self._result(backup=Path("output/ep/glossary.yaml.bak")),
+            ),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["glossary", "output/ep", "--model", "m", "--force"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("glossary.yaml.bak", fake_stdout.getvalue())
+
+    def test_glossary_passes_options_to_draft(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "c.yaml"
+            config_path.write_text(
+                "target_language: vi\ntranslation:\n  model: from-config\n"
+                "  glossary_max_chars: 5000\n  max_attempts: 2\n",
+                encoding="utf-8",
+            )
+            with (
+                patch(
+                    "app.translation.glossary_draft.draft_glossary_file", return_value=self._result()
+                ) as mock_draft,
+                patch("sys.stdout", new_callable=StringIO),
+            ):
+                cli.main(["glossary", "output/ep", "--config", str(config_path)])
+                config_kwargs = mock_draft.call_args.kwargs
+                config_model = mock_draft.call_args.args[1].model
+
+                cli.main(
+                    [
+                        "glossary", "output/ep", "--config", str(config_path),
+                        "--model", "from-cli", "--max-chars", "1234", "--force",
+                    ]
+                )
+                cli_kwargs = mock_draft.call_args.kwargs
+                cli_model = mock_draft.call_args.args[1].model
+
+        self.assertEqual(config_model, "from-config")
+        self.assertEqual(config_kwargs["max_chars"], 5000)
+        self.assertEqual(config_kwargs["max_attempts"], 2)
+        self.assertEqual(config_kwargs["target_language"], "vi")
+        self.assertFalse(config_kwargs["force"])
+        self.assertEqual(cli_model, "from-cli")
+        self.assertEqual(cli_kwargs["max_chars"], 1234)
+        self.assertTrue(cli_kwargs["force"])
+
+    def test_glossary_error_exits_one(self) -> None:
+        with (
+            patch(
+                "app.translation.glossary_draft.draft_glossary_file",
+                side_effect=GlossaryError("Không tìm thấy transcript.json. Chạy `transcribe`."),
+            ),
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(["glossary", "output/ep", "--model", "m"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[glossary] LỖI", fake_stderr.getvalue())
+        self.assertIn("transcribe", fake_stderr.getvalue())
+
+    def test_glossary_without_model_errors(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "c.yaml"
+            config_path.write_text("translation:\n  batch_size: 20\n", encoding="utf-8")
+            with patch("sys.stderr", new_callable=StringIO) as fake_stderr:
+                exit_code = cli.main(["glossary", "output/ep", "--config", str(config_path)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[glossary] LỖI", fake_stderr.getvalue())
+        self.assertIn("--model", fake_stderr.getvalue())
+
+    def test_glossary_invalid_max_chars_errors(self) -> None:
+        with patch("sys.stderr", new_callable=StringIO) as fake_stderr:
+            exit_code = cli.main(["glossary", "output/ep", "--model", "m", "--max-chars", "0"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--max-chars", fake_stderr.getvalue())
+
+
+class TestTranslateGlossaryOption(unittest.TestCase):
+    """CP6.5: ``translate`` gộp ``--glossary``/config với ``<ep>/glossary.yaml``."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.episode = self.root / "ep"
+        self.episode.mkdir()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _result(self) -> TranslationResult:
+        return TranslationResult(
+            translated_path=self.episode / "translated.json",
+            source_language="en",
+            target_language="vi",
+            segments=[TranslatedSegment(1, 0.0, 1.0, "Hi", "Chào")],
+            skipped=False,
+            failed_ids=[],
+        )
+
+    def _translate(self, *extra: str) -> tuple[int, str, str, object]:
+        with (
+            patch(
+                "app.translation.translate.translate_transcript", return_value=self._result()
+            ) as mock_translate,
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(["translate", str(self.episode), "--model", "m", *extra])
+        return exit_code, fake_stdout.getvalue(), fake_stderr.getvalue(), mock_translate
+
+    def test_no_glossary_prints_no_glossary_line_and_passes_none(self) -> None:
+        exit_code, out, _, mock_translate = self._translate()
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("glossary", out)
+        self.assertIsNone(mock_translate.call_args.kwargs["glossary"])
+
+    def test_episode_glossary_is_picked_up_automatically(self) -> None:
+        path = self.episode / "glossary.yaml"
+        path.write_text("terms: {hare: thỏ rừng}\n", encoding="utf-8")
+        exit_code, out, _, mock_translate = self._translate()
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn(f"[translate] glossary : {path}", out)
+        self.assertEqual(mock_translate.call_args.kwargs["glossary"].terms, (("hare", "thỏ rừng"),))
+
+    def test_empty_glossary_file_behaves_like_none(self) -> None:
+        (self.episode / "glossary.yaml").write_text("# chỉ có comment\n", encoding="utf-8")
+        exit_code, out, _, mock_translate = self._translate()
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("glossary", out)
+        self.assertIsNone(mock_translate.call_args.kwargs["glossary"])
+
+    def test_glossary_flag_merges_shared_then_episode(self) -> None:
+        shared = self.root / "shared.yaml"
+        shared.write_text("context: chung\nterms: {a: mot}\n", encoding="utf-8")
+        episode_file = self.episode / "glossary.yaml"
+        episode_file.write_text("terms: {b: hai}\n", encoding="utf-8")
+        exit_code, out, _, mock_translate = self._translate("--glossary", str(shared))
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn(f"[translate] glossary : {shared}, {episode_file}", out)
+        glossary = mock_translate.call_args.kwargs["glossary"]
+        self.assertEqual(glossary.context, "chung")
+        self.assertEqual(glossary.terms, (("a", "mot"), ("b", "hai")))
+
+    def test_config_glossary_used_and_flag_overrides_it(self) -> None:
+        config_shared = self.root / "config-shared.yaml"
+        config_shared.write_text("terms: {c: ba}\n", encoding="utf-8")
+        flag_shared = self.root / "flag-shared.yaml"
+        flag_shared.write_text("terms: {f: sau}\n", encoding="utf-8")
+        config_path = self.root / "c.yaml"
+        config_path.write_text(
+            f"translation:\n  model: m\n  glossary: {config_shared.as_posix()}\n", encoding="utf-8"
+        )
+
+        _, out, _, mock_translate = self._translate("--config", str(config_path))
+        self.assertEqual(mock_translate.call_args.kwargs["glossary"].terms, (("c", "ba"),))
+        self.assertIn(str(config_shared), out)
+
+        _, out, _, mock_translate = self._translate(
+            "--config", str(config_path), "--glossary", str(flag_shared)
+        )
+        self.assertEqual(mock_translate.call_args.kwargs["glossary"].terms, (("f", "sau"),))
+        self.assertNotIn(str(config_shared), out)
+
+    def test_missing_shared_glossary_exits_one(self) -> None:
+        exit_code, out, err, mock_translate = self._translate(
+            "--glossary", str(self.root / "khong-co.yaml")
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[translate] LỖI", err)
+        self.assertIn("khong-co.yaml", err)
+        mock_translate.assert_not_called()
+
+    def test_broken_episode_glossary_exits_one(self) -> None:
+        (self.episode / "glossary.yaml").write_text("characterz: []\n", encoding="utf-8")
+        exit_code, _, err, mock_translate = self._translate()
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[translate] LỖI", err)
+        self.assertIn("characterz", err)
+        mock_translate.assert_not_called()
 
 
 if __name__ == "__main__":

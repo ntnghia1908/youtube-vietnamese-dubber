@@ -13,15 +13,17 @@ whisper:
 
 translation:
   provider: ollama
-  model: qwen3:8b        # bắt buộc — không có mặc định trong code
+  model: gemma3:12b      # bắt buộc — không có mặc định trong code (CP6.5: qwen3:8b trượt xưng hô ba–con)
   # host: http://localhost:11434   # bỏ trống -> biến môi trường OLLAMA_HOST -> localhost
   batch_size: 25         # số segment mỗi lần gọi model (plan khuyến nghị 20–30)
   context_size: 5        # số dòng đã dịch trước đó gửi kèm làm ngữ cảnh
   max_attempts: 3        # số lần thử mỗi batch trước khi chia đôi batch
   temperature: 0.3       # > 0 để lần thử lại ra output khác
   num_ctx: 8192          # context window của Ollama; nhỏ quá thì prompt bị cắt im lặng
-  timeout_seconds: 300
+  timeout_seconds: 900   # gemma3:12b: một batch 25 câu ~110–175s (GPU 6 GB / CPU thuần)
   think: false           # tắt chế độ suy nghĩ của qwen3; để null nếu model không hỗ trợ
+  # glossary: ./glossary.yaml   # glossary dùng chung (vd cả series), gộp với <episode>/glossary.yaml
+  glossary_max_chars: 8000      # ký tự transcript tối đa gửi model khi tạo nháp (video zh/ja: giảm ~ một nửa)
 
 tts:
   provider: edge                # hiện chỉ có edge (edge-tts, miễn phí, không cần API key)

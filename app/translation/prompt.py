@@ -9,6 +9,12 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Chỉ để type hint: glossary.py import base.py, base.py import prompt.py,
+    # nên import thật ở đây sẽ tạo vòng import.
+    from app.translation.glossary import Glossary
 
 # Chỉ để prompt dễ hiểu hơn mã ISO; mã không có trong bảng thì dùng nguyên mã.
 _LANGUAGE_NAMES = {
@@ -68,12 +74,63 @@ def language_name(code: str) -> str:
     return _LANGUAGE_NAMES.get(code, code)
 
 
+def glossary_prompt_block(glossary: Glossary, target_language: str) -> str:
+    """Khối ngữ cảnh/nhân vật/xưng hô/thuật ngữ nối vào cuối system prompt.
+
+    Bỏ hẳn mục rỗng để prompt ngắn: model cỡ 8–12B dễ lạc khi khối dài, và
+    ``num_ctx`` là tài nguyên chung với batch dịch.
+    """
+    tgt = language_name(target_language)
+    sections: list[str] = []
+
+    if glossary.context:
+        sections.append(
+            "Story context (written by the user; follow it over your own guesses):\n"
+            + glossary.context
+        )
+
+    if glossary.characters:
+        lines = []
+        for c in glossary.characters:
+            line = f'- {c.name} -> "{c.vi}"'
+            if c.note:
+                line += f" ({c.note})"
+            line += "."
+            if c.aliases:
+                line += " Often misheard as: " + ", ".join(f'"{a}"' for a in c.aliases) + "."
+            lines.append(line)
+        sections.append(
+            "Characters (the transcript comes from speech-to-text and may misspell names; "
+            "use these):\n" + "\n".join(lines)
+        )
+
+    if glossary.address:
+        # Câu chữ này đã đo trên episode thật (decisions/checkpoint-6.5.md, mục D):
+        # gemma3:12b dịch đúng ba–con 13/13 câu "I love you". Hai lần thử câu chữ
+        # mạnh hơn ("I" = "con" tường minh; dặn suy ra ai đang nói từ câu kể
+        # "said <name>") KHÔNG cải thiện qwen3:8b (vẫn 0/13, luôn dùng "mình")
+        # nên giữ bản đơn giản này.
+        lines = [
+            f'- When {a.speaker} speaks to {a.listener}: refers to self as "{a.self_term}", '
+            f'calls the listener "{a.other_term}".'
+            for a in glossary.address
+        ]
+        sections.append(f"Forms of address (use exactly these {tgt} pronouns):\n" + "\n".join(lines))
+
+    if glossary.terms:
+        lines = [f'- "{source}" -> "{vi}"' for source, vi in glossary.terms]
+        sections.append("Fixed terms (always translate like this):\n" + "\n".join(lines))
+
+    return "\n\n".join(sections)
+
+
 def build_messages(
     lines: Sequence[SourceLine],
     *,
     context: Sequence[ContextLine],
     source_language: str,
     target_language: str,
+    glossary: Glossary | None = None,
 ) -> list[dict[str, str]]:
     src = language_name(source_language)
     tgt = language_name(target_language)
@@ -90,6 +147,10 @@ Rules:
 - Keep proper names unless they have a well-known {tgt} form.
 - No explanations, notes, brackets or sound descriptions unless the source has them.
 - Output only JSON: {{"translations": [{{"id": <id>, "text": "<translation>"}}]}}"""
+
+    # Glossary None/rỗng -> system prompt giống hệt CP3 (không đổi một byte).
+    if glossary is not None and not glossary.is_empty():
+        system += "\n\n" + glossary_prompt_block(glossary, target_language)
 
     parts = []
     if context:

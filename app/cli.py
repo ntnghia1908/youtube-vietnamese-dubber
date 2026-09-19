@@ -6,6 +6,8 @@ Checkpoint 3: subcommand ``translate`` (dịch transcript) + ``--config``.
 Checkpoint 4: subcommand ``tts`` (tổng hợp giọng nói bằng edge-tts).
 Checkpoint 5: subcommand ``normalize`` (chuẩn hoá timing tts vs slot gốc).
 Checkpoint 6: subcommand ``render`` (dựng voice_track.wav + mix ra output_vi.mp4).
+Checkpoint 6.5: subcommand ``glossary`` (tạo nháp glossary.yaml bằng model) +
+``translate --glossary`` (glossary dùng chung, gộp với <episode>/glossary.yaml).
 Các subcommand khác (dub, playlist, ...) sẽ được thêm dần ở
 các checkpoint tiếp theo, xem docs/IMPLEMENTATION_PLAN.md.
 
@@ -142,6 +144,43 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Dịch lại từ đầu dù translated.json (hoặc tiến trình dịch dở) đã tồn tại.",
+    )
+    translate_parser.add_argument(
+        "--glossary",
+        default=None,
+        help=(
+            "Glossary dùng chung (vd cả series), gộp với <episode>/glossary.yaml (file của "
+            "tập luôn tự nhận nếu có). Mặc định: `translation.glossary` trong config."
+        ),
+    )
+
+    glossary_parser = subparsers.add_parser(
+        "glossary",
+        parents=[common],
+        help="Tạo NHÁP glossary.yaml (nhân vật, xưng hô, thuật ngữ) từ transcript.json bằng model.",
+    )
+    glossary_parser.add_argument(
+        "episode_dir",
+        help="Thư mục episode đã có transcript.json (tạo bởi subcommand `transcribe`).",
+    )
+    glossary_parser.add_argument(
+        "--model",
+        default=None,
+        help="Tên model tạo nháp (vd qwen3:8b). Mặc định: `translation.model` trong config.",
+    )
+    glossary_parser.add_argument(
+        "--max-chars",
+        type=int,
+        default=None,
+        help=(
+            "Số ký tự transcript tối đa gửi model. Mặc định: `translation.glossary_max_chars` "
+            "trong config, hoặc 8000."
+        ),
+    )
+    glossary_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Tạo lại dù glossary.yaml đã tồn tại (bản cũ được lưu ở glossary.yaml.bak).",
     )
 
     tts_parser = subparsers.add_parser(
@@ -301,6 +340,7 @@ def _cmd_translate(args: argparse.Namespace, config: AppConfig) -> int:
     from app.transcription.whisper import TRANSCRIPT_FILENAME
     from app.translation import create_translator
     from app.translation.base import TranslationError
+    from app.translation.glossary import load_effective_glossary
     from app.translation.translate import TRANSLATED_FILENAME, translate_transcript
 
     overrides = {
@@ -319,7 +359,20 @@ def _cmd_translate(args: argparse.Namespace, config: AppConfig) -> int:
     target_language = args.target_lang or config.target_language
 
     episode_dir = Path(args.episode_dir)
+    # Flag --glossary ghi đè config; chỉ là tầng dùng chung, còn
+    # <ep>/glossary.yaml luôn tự nhận nếu có.
+    shared_glossary = args.glossary if args.glossary is not None else tconfig.glossary
     try:
+        # Trong khối try: GlossaryError là một TranslationError (file sai đường
+        # dẫn/YAML hỏng phải báo lỗi rõ, không được dịch lặng lẽ không glossary).
+        glossary, glossary_paths = load_effective_glossary(
+            episode_dir, Path(shared_glossary) if shared_glossary else None
+        )
+        if glossary is not None:
+            print(
+                "[translate] glossary : " + ", ".join(str(p) for p in glossary_paths),
+                flush=True,
+            )
         translator = create_translator(tconfig)
         result = translate_transcript(
             episode_dir / TRANSCRIPT_FILENAME,
@@ -330,6 +383,7 @@ def _cmd_translate(args: argparse.Namespace, config: AppConfig) -> int:
             context_size=tconfig.context_size,
             max_attempts=tconfig.max_attempts,
             force=args.force,
+            glossary=glossary,
             # flush: khi stdout bị pipe/ghi ra file log, Python buffer output
             # nên không thấy tiến trình cho tới khi lệnh kết thúc.
             log=lambda message: print(message, flush=True),
@@ -350,6 +404,54 @@ def _cmd_translate(args: argparse.Namespace, config: AppConfig) -> int:
         print(
             f"[translate] CẢNH BÁO: {len(result.failed_ids)} segment chưa dịch được "
             f"(id {ids}) — chạy lại lệnh để thử lại."
+        )
+    return 0
+
+
+def _cmd_glossary(args: argparse.Namespace, config: AppConfig) -> int:
+    from app.translation import create_translator
+    from app.translation.base import TranslationError
+    from app.translation.glossary_draft import draft_glossary_file
+
+    tconfig = replace(config.translation, **({"model": args.model} if args.model else {}))
+    max_chars = args.max_chars if args.max_chars is not None else tconfig.glossary_max_chars
+    if max_chars <= 0:
+        print("[glossary] LỖI: --max-chars phải lớn hơn 0.", file=sys.stderr)
+        return 1
+
+    episode_dir = Path(args.episode_dir)
+    try:
+        translator = create_translator(tconfig)
+        result = draft_glossary_file(
+            episode_dir,
+            translator,
+            target_language=config.target_language,
+            max_chars=max_chars,
+            max_attempts=tconfig.max_attempts,
+            force=args.force,
+            # flush: giống _cmd_translate — thấy log ngay cả khi stdout bị pipe.
+            log=lambda message: print(message, flush=True),
+        )
+    except TranslationError as exc:
+        # GlossaryError là một TranslationError.
+        print(f"[glossary] LỖI: {exc}", file=sys.stderr)
+        return 1
+
+    if result.skipped:
+        print(
+            "[glossary] SKIP: glossary.yaml đã tồn tại (dùng --force để tạo lại; "
+            "bản cũ được lưu ở glossary.yaml.bak)."
+        )
+    print(f"[glossary] glossary   : {result.glossary_path}")
+    print(f"[glossary] characters : {len(result.glossary.characters)}")
+    print(f"[glossary] address    : {len(result.glossary.address)}")
+    print(f"[glossary] terms      : {len(result.glossary.terms)}")
+    if result.backup_path is not None:
+        print(f"[glossary] backup     : {result.backup_path}")
+    if not result.skipped:
+        print(
+            "[glossary] LƯU Ý: đây là bản nháp do model tạo — mở file, sửa tên nhân vật/xưng hô "
+            f'cho đúng rồi chạy `python -m app translate "{episode_dir}"`.'
         )
     return 0
 
@@ -523,6 +625,7 @@ _COMMANDS = {
     "download": _cmd_download,
     "transcribe": _cmd_transcribe,
     "translate": _cmd_translate,
+    "glossary": _cmd_glossary,
     "tts": _cmd_tts,
     "normalize": _cmd_normalize,
     "render": _cmd_render,

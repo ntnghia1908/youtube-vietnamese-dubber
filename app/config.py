@@ -47,6 +47,11 @@ class TranslationConfig:
     timeout_seconds: float = 300.0
     # None -> không gửi field ``think`` (cho model không hỗ trợ thinking).
     think: bool | None = False
+    # Glossary dùng chung (vd cả series), gộp với <episode>/glossary.yaml.
+    # Không kiểm file tồn tại lúc parse config — kiểm lúc dùng (lệnh translate).
+    glossary: str | None = None
+    # Số ký tự transcript tối đa gửi model khi tạo nháp glossary.
+    glossary_max_chars: int = 8000
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,8 @@ _TRANSLATION_TYPES: dict[str, tuple[type | None, ...]] = {
     "num_ctx": (int,),
     "timeout_seconds": (int, float),
     "think": (bool, None),
+    "glossary": (str, None),
+    "glossary_max_chars": (int,),
 }
 _SUPPORTED_PROVIDERS = ("ollama",)
 _TTS_TYPES: dict[str, tuple[type | None, ...]] = {
@@ -256,7 +263,7 @@ def parse_config(data: Any) -> AppConfig:
             f"`translation.provider` không hỗ trợ: {translation.provider!r}. "
             f"Hiện có: {', '.join(_SUPPORTED_PROVIDERS)}."
         )
-    for key in ("batch_size", "max_attempts", "num_ctx", "timeout_seconds"):
+    for key in ("batch_size", "max_attempts", "num_ctx", "timeout_seconds", "glossary_max_chars"):
         _positive("translation", key, getattr(translation, key))
     if translation.context_size < 0:
         raise ConfigError("`translation.context_size` không được âm.")

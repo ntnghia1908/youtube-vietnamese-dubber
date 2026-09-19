@@ -59,6 +59,38 @@ class TestParseConfig(unittest.TestCase):
     def test_temperature_accepts_int(self) -> None:
         self.assertEqual(parse_config({"translation": {"temperature": 0}}).translation.temperature, 0)
 
+    def test_translation_glossary_defaults(self) -> None:
+        config = parse_config(None)
+        self.assertIsNone(config.translation.glossary)
+        self.assertEqual(config.translation.glossary_max_chars, 8000)
+
+    def test_translation_glossary_reads_values(self) -> None:
+        config = parse_config(
+            {"translation": {"glossary": "./series/glossary.yaml", "glossary_max_chars": 4000}}
+        )
+        self.assertEqual(config.translation.glossary, "./series/glossary.yaml")
+        self.assertEqual(config.translation.glossary_max_chars, 4000)
+        # null tường minh cũng hợp lệ (= không dùng glossary chung).
+        self.assertIsNone(parse_config({"translation": {"glossary": None}}).translation.glossary)
+
+    def test_translation_glossary_rejects_wrong_type(self) -> None:
+        for value in (5, ["a.yaml"], True):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                parse_config({"translation": {"glossary": value}})
+
+    def test_translation_glossary_does_not_check_file_exists(self) -> None:
+        # Kiểm file tồn tại là việc lúc dùng (lệnh translate), không phải lúc parse config.
+        config = parse_config({"translation": {"glossary": "khong/ton/tai.yaml"}})
+        self.assertEqual(config.translation.glossary, "khong/ton/tai.yaml")
+
+    def test_translation_glossary_max_chars_must_be_positive_int(self) -> None:
+        for value in (0, -1):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                parse_config({"translation": {"glossary_max_chars": value}})
+        for value in ("8000", 8.5, True):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                parse_config({"translation": {"glossary_max_chars": value}})
+
     def test_tts_section_defaults(self) -> None:
         config = parse_config(None)
         self.assertEqual(config.tts.provider, "edge")
@@ -206,6 +238,9 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(config.mixing.original_volume, 0.30)
         self.assertEqual(config.mixing.speech_volume, 1.0)
         self.assertEqual(config.mixing.max_shift_seconds, 1.0)
+        # CP6.5: glossary dùng chung tắt mặc định (dòng đó nằm trong comment).
+        self.assertIsNone(config.translation.glossary)
+        self.assertEqual(config.translation.glossary_max_chars, 8000)
 
 
 if __name__ == "__main__":

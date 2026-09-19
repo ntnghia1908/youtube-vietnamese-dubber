@@ -26,8 +26,9 @@ from app.translation.base import (
     TranslatorOutputError,
     parse_translations,
 )
+from app.translation.glossary import Glossary, parse_glossary
 from app.translation.ollama import OllamaTranslator, resolve_host
-from app.translation.prompt import ContextLine, SourceLine, build_messages
+from app.translation.prompt import ContextLine, SourceLine, build_messages, glossary_prompt_block
 from app.translation.translate import partial_path_for, translate_transcript
 
 
@@ -464,6 +465,380 @@ class TestTranslateTranscript(unittest.TestCase):
         )
         with self.assertRaisesRegex(TranslationError, "trùng id"):
             self._run(FakeTranslator())
+
+
+def _hare_glossary(**overrides: Any) -> Glossary:
+    data: dict[str, Any] = {
+        "context": "Truyện thiếu nhi đọc to.",
+        "characters": [
+            {
+                "name": "Little Nutbrown Hare",
+                "vi": "Thỏ Con",
+                "aliases": ["Little Nut Brown Hair"],
+                "note": "nhân vật chính",
+            },
+            {"name": "Big Nutbrown Hare", "vi": "Thỏ Cha", "aliases": ["Big Nut Brown Hair"]},
+        ],
+        "address": [
+            {"speaker": "Little Nutbrown Hare", "listener": "Big Nutbrown Hare", "self": "con", "other": "ba"}
+        ],
+        "terms": {"hare": "thỏ rừng"},
+        "skip": ["support us on Patreon"],
+    }
+    data.update(overrides)
+    return parse_glossary(data)
+
+
+class TestGlossaryPromptBlock(unittest.TestCase):
+    def test_none_or_empty_glossary_gives_identical_messages(self) -> None:
+        kwargs: dict[str, Any] = {"context": [ContextLine(1, "Hi.", "Chào.")], "source_language": "en", "target_language": "vi"}
+        old = build_messages(_lines(2), **kwargs)
+        self.assertEqual(build_messages(_lines(2), glossary=None, **kwargs), old)
+        self.assertEqual(build_messages(_lines(2), glossary=Glossary(), **kwargs), old)
+
+    def test_system_prompt_gets_block_with_four_sections(self) -> None:
+        old = build_messages(_lines(1), context=[], source_language="en", target_language="vi")
+        messages = build_messages(
+            _lines(1), context=[], source_language="en", target_language="vi", glossary=_hare_glossary()
+        )
+        system = messages[0]["content"]
+        self.assertTrue(system.startswith(old[0]["content"] + "\n\n"))
+        for expected in (
+            "Story context",
+            "Truyện thiếu nhi đọc to.",
+            "Characters (",
+            '- Little Nutbrown Hare -> "Thỏ Con" (nhân vật chính). Often misheard as: "Little Nut Brown Hair".',
+            '- Big Nutbrown Hare -> "Thỏ Cha".',
+            "Forms of address (use exactly these Vietnamese pronouns)",
+            'When Little Nutbrown Hare speaks to Big Nutbrown Hare: refers to self as "con", calls the listener "ba".',
+            "Fixed terms",
+            '- "hare" -> "thỏ rừng"',
+        ):
+            self.assertIn(expected, system)
+        # user message không đổi.
+        self.assertEqual(messages[1], old[1])
+
+    def test_empty_sections_are_dropped(self) -> None:
+        block = glossary_prompt_block(Glossary(context="chỉ ngữ cảnh"), "vi")
+        self.assertIn("Story context", block)
+        for absent in ("Characters", "Forms of address", "Fixed terms"):
+            self.assertNotIn(absent, block)
+
+        block = glossary_prompt_block(parse_glossary({"terms": {"a": "b"}}), "vi")
+        self.assertEqual(block, 'Fixed terms (always translate like this):\n- "a" -> "b"')
+
+    def test_skip_is_not_in_the_prompt(self) -> None:
+        # `skip` xử lý bằng code (câu không tới model), không cần nhắc trong prompt.
+        self.assertNotIn("Patreon", glossary_prompt_block(_hare_glossary(), "vi"))
+
+    def test_translate_batch_forwards_glossary_to_prompt(self) -> None:
+        translator = OllamaTranslator("m")
+        content = json.dumps({"translations": [{"id": 1, "text": "x"}]})
+        response = _FakeResponse(json.dumps({"message": {"content": content}, "done_reason": "stop"}).encode())
+        with patch("urllib.request.urlopen", return_value=response) as mock_open:
+            translator.translate_batch(
+                _lines(1), context=[], source_language="en", target_language="vi", glossary=_hare_glossary()
+            )
+        body = json.loads(mock_open.call_args.args[0].data)
+        self.assertIn("Thỏ Con", body["messages"][0]["content"])
+
+    def test_complete_json_is_public_wrapper(self) -> None:
+        translator = OllamaTranslator("m")
+        response = _FakeResponse(json.dumps({"message": {"content": '{"a": 1}'}, "done_reason": "stop"}).encode())
+        schema = {"type": "object"}
+        with patch("urllib.request.urlopen", return_value=response) as mock_open:
+            raw = translator.complete_json([{"role": "user", "content": "hi"}], schema=schema, item_count=40)
+        self.assertEqual(raw, '{"a": 1}')
+        body = json.loads(mock_open.call_args.args[0].data)
+        self.assertEqual(body["format"], schema)
+        self.assertEqual(body["options"]["num_predict"], 100 + 80 * 40)
+
+
+class GlossaryFakeTranslator(Translator):
+    """Translator giả nhận kwarg ``glossary`` và ghi lại text mà model 'nhìn thấy'."""
+
+    provider = "fake"
+
+    def __init__(self, *, model: str = "fake-model") -> None:
+        super().__init__(model)
+        self.calls: list[dict[str, Any]] = []
+
+    def translate_batch(
+        self,
+        lines: Sequence[SourceLine],
+        *,
+        context: Sequence[ContextLine],
+        source_language: str,
+        target_language: str,
+        glossary: Glossary | None = None,
+    ) -> dict[int, str]:
+        self.calls.append(
+            {
+                "ids": [ln.id for ln in lines],
+                "texts": [ln.text for ln in lines],
+                "context_texts": [c.text for c in context],
+                "glossary": glossary,
+            }
+        )
+        return {ln.id: f"vi {ln.id}" for ln in lines}
+
+    def _complete_json(self, messages: Any, *, schema: Any, item_count: int) -> str:
+        raise NotImplementedError
+
+
+_HARE_LINES = [
+    "Little Nut Brown Hair went to bed.",
+    "Big Nut Brown Hair said good night.",
+    "Please support us on Patreon.",
+    "I love you.",
+    "little nut brown hair smiled.",
+]
+
+
+class TestTranslateWithGlossary(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.transcript = self.dir / "transcript.json"
+        self.translated = self.dir / "translated.json"
+        self.logs: list[str] = []
+        self._write_transcript(_HARE_LINES)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _write_transcript(self, texts: Sequence[str]) -> None:
+        segments = [
+            {"id": i, "start": float(i), "end": i + 1.5, "text": text} for i, text in enumerate(texts, start=1)
+        ]
+        self.transcript.write_text(json.dumps({"language": "en", "segments": segments}), encoding="utf-8")
+
+    def _run(self, translator: Translator, **kwargs: Any):
+        params: dict[str, Any] = {
+            "target_language": "vi",
+            "batch_size": 2,
+            "context_size": 2,
+            "log": self.logs.append,
+            "sleep": lambda seconds: None,
+        }
+        params.update(kwargs)
+        return translate_transcript(self.transcript, self.translated, translator, **params)
+
+    def _data(self) -> dict[str, Any]:
+        return json.loads(self.translated.read_text(encoding="utf-8"))
+
+    def test_aliases_fixed_in_lines_and_context_but_source_text_kept(self) -> None:
+        translator = GlossaryFakeTranslator()
+        glossary = _hare_glossary(skip=[])
+        self._run(translator, glossary=glossary)
+
+        self.assertEqual(
+            translator.calls[0]["texts"],
+            ["Little Nutbrown Hare went to bed.", "Big Nutbrown Hare said good night."],
+        )
+        # Batch 2 (id 3, 4): ngữ cảnh là hai dòng trước, cũng đã sửa alias.
+        self.assertEqual(
+            translator.calls[1]["context_texts"],
+            ["Little Nutbrown Hare went to bed.", "Big Nutbrown Hare said good night."],
+        )
+        # Ngôn ngữ nguồn trong translated.json vẫn là bản gốc của Whisper.
+        data = self._data()
+        self.assertEqual([s["source_text"] for s in data["segments"]], _HARE_LINES)
+        self.assertEqual(data["glossary_sha256"], glossary.sha256())
+        # Hàm không đụng transcript.json.
+        self.assertEqual(json.loads(self.transcript.read_text(encoding="utf-8"))["segments"][0]["text"], _HARE_LINES[0])
+
+    def test_translate_batch_receives_glossary_kwarg(self) -> None:
+        translator = GlossaryFakeTranslator()
+        glossary = _hare_glossary()
+        self._run(translator, glossary=glossary)
+        self.assertTrue(translator.calls)
+        self.assertTrue(all(call["glossary"] is glossary for call in translator.calls))
+
+    def test_skip_lines_never_reach_model_and_are_not_failed(self) -> None:
+        translator = GlossaryFakeTranslator()
+        result = self._run(translator, glossary=_hare_glossary())
+
+        sent = [i for call in translator.calls for i in call["ids"]]
+        self.assertEqual(sent, [1, 2, 4, 5])
+        self.assertEqual(result.failed_ids, [])
+        self.assertEqual(result.segments[2].translated_text, "")
+        self.assertEqual(self._data()["failed_ids"], [])
+        self.assertTrue(any("bỏ qua 1 câu" in line for line in self.logs))
+
+    def test_no_glossary_means_no_kwarg_and_null_hash(self) -> None:
+        # FakeTranslator cũ có chữ ký cố định: TypeError nếu bị truyền `glossary=`.
+        for glossary in (None, Glossary()):
+            with self.subTest(glossary=glossary):
+                self.translated.unlink(missing_ok=True)
+                translator = FakeTranslator()
+                self._run(translator, glossary=glossary)
+                self.assertEqual([c["ids"] for c in translator.calls], [[1, 2], [3, 4], [5]])
+                self.assertIsNone(self._data()["glossary_sha256"])
+
+    def test_no_glossary_sends_source_text_unchanged(self) -> None:
+        translator = GlossaryFakeTranslator()
+        self._run(translator)
+        self.assertEqual(translator.calls[0]["texts"], _HARE_LINES[:2])
+        self.assertIsNone(translator.calls[0]["glossary"])
+
+    def test_empty_glossary_treated_as_none(self) -> None:
+        translator = GlossaryFakeTranslator()
+        self._run(translator, glossary=Glossary())
+        self.assertIsNone(translator.calls[0]["glossary"])
+        self.assertIsNone(self._data()["glossary_sha256"])
+
+    def test_same_glossary_skips(self) -> None:
+        self._run(GlossaryFakeTranslator(), glossary=_hare_glossary())
+        translator = GlossaryFakeTranslator()
+        result = self._run(translator, glossary=_hare_glossary())
+        self.assertTrue(result.skipped)
+        self.assertEqual(translator.calls, [])
+
+    def test_changed_glossary_retranslates_everything(self) -> None:
+        self._run(GlossaryFakeTranslator(), glossary=_hare_glossary())
+        old_hash = self._data()["glossary_sha256"]
+
+        changed = _hare_glossary(terms={"hare": "thỏ"})  # đổi một `vi` của term
+        translator = GlossaryFakeTranslator()
+        self.logs.clear()
+        result = self._run(translator, glossary=changed)
+
+        self.assertFalse(result.skipped)
+        self.assertEqual([i for c in translator.calls for i in c["ids"]], [1, 2, 4, 5])
+        self.assertTrue(any("glossary đã thay đổi" in line for line in self.logs))
+        self.assertNotEqual(self._data()["glossary_sha256"], old_hash)
+        self.assertEqual(self._data()["glossary_sha256"], changed.sha256())
+
+    def test_changed_character_vi_retranslates(self) -> None:
+        self._run(GlossaryFakeTranslator(), glossary=_hare_glossary())
+        translator = GlossaryFakeTranslator()
+        characters = [{"name": "Little Nutbrown Hare", "vi": "Thỏ Nhỏ", "aliases": ["Little Nut Brown Hair"]}]
+        self._run(translator, glossary=_hare_glossary(characters=characters))
+        self.assertTrue(translator.calls)
+        self.assertTrue(any("glossary đã thay đổi" in line for line in self.logs))
+
+    def test_old_file_without_key_and_no_glossary_skips(self) -> None:
+        self.translated.write_text(
+            json.dumps(
+                {
+                    "source_language": "en",
+                    "target_language": "vi",
+                    "translator": {"provider": "fake", "model": "fake-model"},
+                    "transcript_sha256": hashlib.sha256(self.transcript.read_bytes()).hexdigest(),
+                    "failed_ids": [],
+                    "segments": [
+                        {"id": 1, "start": 1.0, "end": 2.5, "source_text": "x", "translated_text": "cũ"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        translator = FakeTranslator()
+        result = self._run(translator)
+        self.assertTrue(result.skipped)
+        self.assertEqual(translator.calls, [])
+
+    def test_old_file_without_key_and_new_glossary_retranslates(self) -> None:
+        self._run(FakeTranslator())
+        data = self._data()
+        del data["glossary_sha256"]  # mô phỏng file sinh ra trước CP6.5
+        self.translated.write_text(json.dumps(data), encoding="utf-8")
+
+        translator = GlossaryFakeTranslator()
+        result = self._run(translator, glossary=_hare_glossary())
+        self.assertFalse(result.skipped)
+        self.assertTrue(any("glossary đã thay đổi" in line for line in self.logs))
+        self.assertEqual(self._data()["glossary_sha256"], _hare_glossary().sha256())
+
+    def test_removed_glossary_retranslates(self) -> None:
+        self._run(GlossaryFakeTranslator(), glossary=_hare_glossary())
+        translator = FakeTranslator()
+        result = self._run(translator)  # không glossary nữa
+        self.assertFalse(result.skipped)
+        self.assertEqual([c["ids"] for c in translator.calls], [[1, 2], [3, 4], [5]])
+        self.assertTrue(any("glossary đã thay đổi" in line for line in self.logs))
+        self.assertIsNone(self._data()["glossary_sha256"])
+
+    def test_glossary_change_triggers_retranslate_even_with_failed_ids(self) -> None:
+        # Có failed_ids + glossary đổi -> dịch lại toàn bộ, không chỉ thử lại id lỗi.
+        def bad_id_2(ids: list[int], n: int) -> dict[int, str]:
+            if 2 in ids:
+                raise TranslatorOutputError("hỏng")
+            return {i: f"vi {i}" for i in ids}
+
+        self._run(FakeTranslator(bad_id_2))
+        self.assertEqual(self._data()["failed_ids"], [2])
+
+        translator = GlossaryFakeTranslator()
+        self._run(translator, glossary=_hare_glossary())
+        self.assertEqual([i for c in translator.calls for i in c["ids"]], [1, 2, 4, 5])
+
+    def test_partial_with_different_glossary_is_discarded(self) -> None:
+        glossary_a = _hare_glossary()
+
+        class Dies(GlossaryFakeTranslator):
+            def translate_batch(self, lines: Any, **kwargs: Any) -> dict[int, str]:
+                if any(ln.id == 4 for ln in lines):
+                    raise TranslationError("bị ngắt")
+                return super().translate_batch(lines, **kwargs)
+
+        with self.assertRaises(TranslationError):
+            self._run(Dies(), glossary=glossary_a)
+        partial = json.loads(partial_path_for(self.translated).read_text(encoding="utf-8"))
+        self.assertEqual(partial["glossary_sha256"], glossary_a.sha256())
+
+        translator = GlossaryFakeTranslator()
+        self._run(translator, glossary=_hare_glossary(terms={"hare": "thỏ"}))
+        # Không dùng lại tiến trình dở: bắt đầu lại từ id 1.
+        self.assertEqual(translator.calls[0]["ids"], [1, 2])
+        self.assertTrue(any("bỏ tiến trình dịch dở cũ" in line and "glossary" in line for line in self.logs))
+
+    def test_partial_with_same_glossary_resumes(self) -> None:
+        glossary = _hare_glossary()
+
+        class Dies(GlossaryFakeTranslator):
+            def translate_batch(self, lines: Any, **kwargs: Any) -> dict[int, str]:
+                if any(ln.id == 4 for ln in lines):
+                    raise TranslationError("bị ngắt")
+                return super().translate_batch(lines, **kwargs)
+
+        with self.assertRaises(TranslationError):
+            self._run(Dies(), glossary=glossary)
+        translator = GlossaryFakeTranslator()
+        self._run(translator, glossary=glossary)
+        self.assertEqual([i for c in translator.calls for i in c["ids"]], [4, 5])
+
+    def test_partial_without_key_and_no_glossary_resumes(self) -> None:
+        """Partial ghi trước CP6.5 (không có key) + không glossary vẫn khớp."""
+        transcript_sha256 = hashlib.sha256(self.transcript.read_bytes()).hexdigest()
+        partial_path_for(self.translated).write_text(
+            json.dumps(
+                {
+                    "transcript_sha256": transcript_sha256,
+                    "source_language": "en",
+                    "target_language": "vi",
+                    "segments": [
+                        {"id": 1, "start": 1.0, "end": 2.5, "source_text": "x", "translated_text": "cũ 1"},
+                        {"id": 2, "start": 2.0, "end": 3.5, "source_text": "y", "translated_text": "cũ 2"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        translator = FakeTranslator()
+        result = self._run(translator)
+        self.assertEqual(translator.calls[0]["ids"], [3, 4])
+        self.assertEqual(result.segments[0].translated_text, "cũ 1")
+
+    def test_long_glossary_block_warns(self) -> None:
+        big = _hare_glossary(context="x" * 4500)
+        self._run(GlossaryFakeTranslator(), glossary=big)
+        self.assertTrue(any("glossary dài" in line and "num_ctx" in line for line in self.logs))
+
+    def test_normal_glossary_does_not_warn(self) -> None:
+        self._run(GlossaryFakeTranslator(), glossary=_hare_glossary())
+        self.assertFalse(any("glossary dài" in line for line in self.logs))
 
 
 class _FakeResponse(io.BytesIO):

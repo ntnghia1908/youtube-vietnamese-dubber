@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.translation.prompt import (
     RESPONSE_SCHEMA,
@@ -22,6 +22,10 @@ from app.translation.prompt import (
     SourceLine,
     build_messages,
 )
+
+if TYPE_CHECKING:
+    # Chỉ để type hint: glossary.py import TranslationError từ file này.
+    from app.translation.glossary import Glossary
 
 
 class TranslationError(RuntimeError):
@@ -115,16 +119,33 @@ class Translator(ABC):
         context: Sequence[ContextLine],
         source_language: str,
         target_language: str,
+        glossary: Glossary | None = None,
     ) -> dict[int, str]:
-        """Dịch một batch, trả về ``{id: bản dịch}`` đã validate."""
+        """Dịch một batch, trả về ``{id: bản dịch}`` đã validate.
+
+        ``glossary`` mặc định ``None`` để các translator/test viết trước CP6.5
+        (chữ ký cố định) vẫn chạy; ``translate_transcript`` chỉ truyền kwarg
+        này khi thật sự có glossary.
+        """
         messages = build_messages(
             lines,
             context=context,
             source_language=source_language,
             target_language=target_language,
+            glossary=glossary,
         )
         raw = self._complete_json(messages, schema=RESPONSE_SCHEMA, item_count=len(lines))
         return parse_translations(raw, lines)
+
+    def complete_json(
+        self, messages: list[dict[str, str]], *, schema: dict[str, Any], item_count: int
+    ) -> str:
+        """Wrapper công khai của ``_complete_json`` cho việc không phải dịch (tạo glossary).
+
+        ``item_count`` chỉ để provider đặt trần token output (Ollama:
+        100 + 80 * item_count).
+        """
+        return self._complete_json(messages, schema=schema, item_count=item_count)
 
     @abstractmethod
     def _complete_json(

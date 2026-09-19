@@ -9,6 +9,10 @@ Resume ở ba mức (xem ``docs/decisions/checkpoint-3.md`` mục C3/C5/C7):
 - Hash transcript khác lần dịch trước (vd transcribe lại với ``--force``)
   -> dịch lại từ đầu như ``force=True``. File cũ chưa có hash (schema cũ)
   thì vẫn SKIP như trước, không có gì để so sánh.
+- Hash glossary (CP6.5) khác lần dịch trước -> dịch lại từ đầu như
+  ``force=True``: sửa glossary là để dịch lại, bắt người dùng nhớ ``--force``
+  thì "không thấy gì thay đổi". File cũ chưa có key ``glossary_sha256`` +
+  không glossary vẫn SKIP; file cũ + glossary mới xuất hiện thì dịch lại.
 - Đang dịch dở -> mỗi batch xong được ghi ngay vào
   ``translated.partial.json``, gắn theo model đang dùng; đổi model khi
   đang dở thì bỏ partial, dịch lại từ đầu (không trộn hai model chung
@@ -31,7 +35,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.transcription.whisper import Segment, read_transcript
 from app.translation.base import (
@@ -40,13 +44,20 @@ from app.translation.base import (
     TranslatorConnectionError,
     TranslatorOutputError,
 )
-from app.translation.prompt import ContextLine, SourceLine
+from app.translation.prompt import ContextLine, SourceLine, glossary_prompt_block
+
+if TYPE_CHECKING:
+    from app.translation.glossary import Glossary
 
 TRANSLATED_FILENAME = "translated.json"
 PARTIAL_SUFFIX = ".partial.json"
 
 # Chờ giữa các lần thử theo plan §24: thử 1, chờ 2s, thử 2, chờ 5s, thử 3.
 _RETRY_DELAYS = (2.0, 5.0)
+
+# Khối glossary dài hơn ngưỡng này (ký tự) thì cảnh báo: nó dùng chung
+# translation.num_ctx với batch dịch, quá dài có thể làm prompt bị cắt.
+_GLOSSARY_WARN_CHARS = 4000
 
 
 @dataclass(frozen=True)
@@ -130,7 +141,8 @@ def _read_translated_meta(path: Path) -> dict[str, Any]:
     """Đọc ``translated.json`` kèm các key mới (C3/C7), dung nạp file cũ.
 
     File sinh ra trước khi có thay đổi này không có ``transcript_sha256``
-    (coi như ``None``) hay ``failed_ids`` (coi như rỗng).
+    (coi như ``None``), ``glossary_sha256`` (``None``) hay ``failed_ids``
+    (coi như rỗng).
     """
     data = _load_translated_data(path)
     segments = _segments_from_data(path, data)
@@ -139,6 +151,8 @@ def _read_translated_meta(path: Path) -> dict[str, Any]:
         "target_language": data.get("target_language", ""),
         "segments": segments,
         "transcript_sha256": data.get("transcript_sha256"),
+        # File cũ (trước CP6.5) không có key -> None, khớp với "không glossary".
+        "glossary_sha256": data.get("glossary_sha256"),
         "failed_ids": list(data.get("failed_ids", [])),
         "translator": data.get("translator"),
     }
@@ -148,6 +162,7 @@ def _load_partial(
     partial_path: Path,
     *,
     transcript_sha256: str,
+    glossary_sha256: str | None,
     target_language: str,
     translator_info: dict[str, str],
     log: Callable[[str], None],
@@ -161,6 +176,10 @@ def _load_partial(
             return {}
         if data["target_language"] != target_language:
             log("[translate] ngôn ngữ đích đã đổi — bỏ tiến trình dịch dở cũ.")
+            return {}
+        if data.get("glossary_sha256") != glossary_sha256:
+            # Partial cũ không có key + không glossary (None == None) -> khớp.
+            log("[translate] glossary đã thay đổi — bỏ tiến trình dịch dở cũ.")
             return {}
         old_translator = data.get("translator")
         if old_translator and (
@@ -199,6 +218,7 @@ def translate_transcript(
     context_size: int = 5,
     max_attempts: int = 3,
     force: bool = False,
+    glossary: Glossary | None = None,
     log: Callable[[str], None] = print,
     sleep: Callable[[float], None] = time.sleep,
 ) -> TranslationResult:
@@ -206,6 +226,12 @@ def translate_transcript(
     transcript_path = Path(transcript_path)
     translated_path = Path(translated_path)
     partial_path = partial_path_for(translated_path)
+
+    # Glossary rỗng coi như không có: hash `None`, không truyền kwarg cho
+    # translator -> hành vi y hệt CP3.
+    if glossary is not None and glossary.is_empty():
+        glossary = None
+    glossary_sha256 = glossary.sha256() if glossary is not None else None
 
     # C3: id các segment lỗi lần dịch trước cần thử lại; chỉ set khi hash
     # transcript khớp và translated.json có failed_ids (xem khối bên dưới).
@@ -230,6 +256,10 @@ def translate_transcript(
             # C7: transcript đã đổi kể từ lần dịch -> ID/nội dung không còn
             # đáng tin, dịch lại toàn bộ như force=True.
             log("[translate] transcript đã thay đổi kể từ lần dịch — dịch lại từ đầu.")
+            force = True
+        elif meta["glossary_sha256"] != glossary_sha256:
+            # CP6.5: glossary đổi (thêm/sửa/xoá) -> bản dịch cũ không còn khớp.
+            log("[translate] glossary đã thay đổi kể từ lần dịch — dịch lại từ đầu.")
             force = True
         elif not meta["failed_ids"]:
             return TranslationResult(
@@ -299,6 +329,7 @@ def translate_transcript(
     partial_done = _load_partial(
         partial_path,
         transcript_sha256=transcript_sha256,
+        glossary_sha256=glossary_sha256,
         target_language=target_language,
         translator_info=translator_info,
         log=log,
@@ -307,10 +338,26 @@ def translate_transcript(
         log(f"[translate] resume: đã có {len(partial_done)}/{len(segments)} segment.")
     done.update(partial_done)
 
-    # Dòng gốc rỗng thì bản dịch rỗng, không tốn một lượt gọi model.
+    if glossary is not None:
+        block_length = len(glossary_prompt_block(glossary, target_language))
+        if block_length > _GLOSSARY_WARN_CHARS:
+            log(
+                f"[translate] CẢNH BÁO: glossary dài ({block_length} ký tự), "
+                "có thể chiếm hết translation.num_ctx — rút gọn glossary hoặc tăng num_ctx."
+            )
+
+    # Dòng gốc rỗng thì bản dịch rỗng, không tốn một lượt gọi model. Câu khớp
+    # mục `skip` của glossary (vd lời kêu gọi Patreon) cũng vậy: bản dịch rỗng
+    # -> TTS bỏ qua (status empty), không nằm trong failed_ids.
+    skipped_by_glossary = 0
     for seg in segments:
         if not seg.text.strip():
             done.setdefault(seg.id, "")
+        elif glossary is not None and glossary.should_skip(seg.text):
+            done.setdefault(seg.id, "")
+            skipped_by_glossary += 1
+    if skipped_by_glossary:
+        log(f"[translate] glossary: bỏ qua {skipped_by_glossary} câu khớp mục `skip`.")
 
     position = {seg.id: i for i, seg in enumerate(segments)}
 
@@ -319,6 +366,7 @@ def translate_transcript(
             partial_path,
             {
                 "transcript_sha256": transcript_sha256,
+                "glossary_sha256": glossary_sha256,
                 "source_language": source_language,
                 "target_language": target_language,
                 "translator": translator_info,
@@ -326,14 +374,22 @@ def translate_transcript(
             },
         )
 
+    def model_text(text: str) -> str:
+        # Sửa alias (cách Whisper nghe sai) chỉ trong text GỬI model; transcript
+        # và `source_text` trong translated.json giữ nguyên gốc.
+        return glossary.apply_aliases(text) if glossary is not None else text
+
     def context_for(batch: list[Segment]) -> list[ContextLine]:
         if context_size == 0:
             return []
         before = [s for s in segments[: position[batch[0].id]] if s.id in done]
-        return [ContextLine(s.id, s.text, done[s.id]) for s in before[-context_size:]]
+        return [ContextLine(s.id, model_text(s.text), done[s.id]) for s in before[-context_size:]]
 
     def call_with_retry(batch: list[Segment], label: str) -> dict[int, str]:
-        lines = [SourceLine(s.id, s.text, max(0.0, s.end - s.start)) for s in batch]
+        lines = [SourceLine(s.id, model_text(s.text), max(0.0, s.end - s.start)) for s in batch]
+        # Chỉ truyền `glossary=` khi có glossary: translator/test viết trước
+        # CP6.5 có chữ ký cố định không nhận kwarg này.
+        extra: dict[str, Any] = {"glossary": glossary} if glossary is not None else {}
 
         def call() -> dict[int, str]:
             return translator.translate_batch(
@@ -341,6 +397,7 @@ def translate_transcript(
                 context=context_for(batch),
                 source_language=source_language,
                 target_language=target_language,
+                **extra,
             )
 
         for attempt in range(1, max_attempts):
@@ -417,6 +474,7 @@ def translate_transcript(
             "target_language": target_language,
             "translator": output_translator_info,
             "transcript_sha256": transcript_sha256,
+            "glossary_sha256": glossary_sha256,
             "failed_ids": failed_ids,
             "segments": [_segment_dict(s, done.get(s.id, "")) for s in segments],
         },
