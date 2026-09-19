@@ -10,8 +10,9 @@ Checkpoint 6.5: subcommand ``glossary`` (tạo nháp glossary.yaml bằng model)
 ``translate --glossary`` (glossary dùng chung, gộp với <episode>/glossary.yaml).
 Checkpoint 7: subcommand ``dub`` (end-to-end: download -> transcribe ->
 translate -> tts -> normalize -> render từ một URL, gọi thẳng các hàm stage).
-Các subcommand khác (playlist, ...) sẽ được thêm dần ở các checkpoint tiếp
-theo, xem docs/IMPLEMENTATION_PLAN.md.
+Checkpoint 8: subcommand ``playlist`` (gọi ``dub`` tuần tự cho mọi tập của
+một playlist, ghi tiến trình vào playlist.json để resume). ``dub`` và
+``playlist`` dùng chung bộ flag qua ``_add_dub_arguments``/``_resolve_dub_options``.
 
 Flag CLI để mặc định ``None`` để phân biệt "không truyền" với "truyền
 đúng giá trị mặc định": không truyền thì lấy từ config.
@@ -284,12 +285,67 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     dub_parser.add_argument("url", help="URL video YouTube cần lồng tiếng.")
-    dub_parser.add_argument(
+    _add_dub_arguments(dub_parser)
+
+    playlist_parser = subparsers.add_parser(
+        "playlist",
+        parents=[common],
+        help=(
+            "Chạy `dub` tuần tự cho mọi tập trong một playlist YouTube, ghi tiến trình vào "
+            "playlist.json để resume, một tập lỗi không chặn cả playlist."
+        ),
+    )
+    playlist_parser.add_argument("url", help="URL playlist YouTube cần lồng tiếng.")
+    _add_dub_arguments(
+        playlist_parser,
+        force_help=(
+            "Làm lại MỌI tập dù đã completed (tải lại video, chạy lại Whisper, dịch lại, tổng "
+            "hợp giọng lại toàn bộ playlist) — tốn thời gian/mạng rất nhiều, nên dùng kèm --items "
+            "để giới hạn phạm vi."
+        ),
+    )
+    playlist_parser.add_argument(
+        "--items",
+        default=None,
+        help='Chỉ xử lý các tập này, vd "1-3,5" (mặc định: mọi tập trong playlist).',
+    )
+    playlist_parser.add_argument(
+        "--recheck",
+        action="store_true",
+        help=(
+            "Gọi lại `dub` cả với tập đã completed (mỗi stage tự resume, chỉ làm lại phần thật "
+            "sự đổi) — dùng sau khi sửa glossary dùng chung cho cả series."
+        ),
+    )
+    playlist_parser.add_argument(
+        "--download-only",
+        action="store_true",
+        help=(
+            "Chỉ chạy luồng tải cho các tập được chọn (một tập mỗi lần), KHÔNG "
+            "transcribe/translate/tts/render — dùng để tải trước cả playlist rồi xử lý offline sau."
+        ),
+    )
+
+    return parser
+
+
+def _add_dub_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    force_help: str = (
+        "Làm lại MỌI stage dù artifact đã có (tải lại video, chạy lại Whisper, dịch lại, "
+        "tổng hợp giọng lại) — tốn thời gian và gọi lại AI/mạng, chỉ dùng khi thật sự cần."
+    ),
+) -> None:
+    """Flag dùng chung giữa ``dub`` và ``playlist`` (CP8) — không gồm ``url``
+    (positional, help text khác nhau giữa hai lệnh) hay ``--config`` (đã có
+    ở parent parser ``common``)."""
+    parser.add_argument(
         "--workspace",
         default=None,
         help="Thư mục gốc chứa các episode (mặc định: `workspace` trong config, hoặc output).",
     )
-    dub_parser.add_argument(
+    parser.add_argument(
         "--source-lang",
         default="auto",
         help=(
@@ -297,7 +353,7 @@ def build_parser() -> argparse.ArgumentParser:
             "dạng). Nên ép cứng nếu auto-detect đoán sai (vd zh bị nhận nhầm thành en)."
         ),
     )
-    dub_parser.add_argument(
+    parser.add_argument(
         "--glossary",
         default=None,
         help=(
@@ -305,27 +361,18 @@ def build_parser() -> argparse.ArgumentParser:
             "luôn tự nhận nếu có). Mặc định: `translation.glossary` trong config."
         ),
     )
-    dub_parser.add_argument(
+    parser.add_argument(
         "--original-volume",
         type=float,
         default=None,
         help="Volume audio gốc khi mix, 0.0–1.0. Mặc định: `mixing.original_volume` trong config, hoặc 0.30.",
     )
-    dub_parser.add_argument(
+    parser.add_argument(
         "--allow-missing",
         action="store_true",
         help="Cho phép segment thiếu audio sau khi đã tự thử sửa: chèn im lặng thay vì báo lỗi.",
     )
-    dub_parser.add_argument(
-        "--force",
-        action="store_true",
-        help=(
-            "Làm lại MỌI stage dù artifact đã có (tải lại video, chạy lại Whisper, dịch lại, "
-            "tổng hợp giọng lại) — tốn thời gian và gọi lại AI/mạng, chỉ dùng khi thật sự cần."
-        ),
-    )
-
-    return parser
+    parser.add_argument("--force", action="store_true", help=force_help)
 
 
 def _load_config(args: argparse.Namespace) -> AppConfig:
@@ -673,11 +720,16 @@ def _cmd_render(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
-def _cmd_dub(args: argparse.Namespace, config: AppConfig) -> int:
-    # Import cục bộ: kéo theo yt-dlp/faster-whisper/Ollama/edge-tts, các
-    # subcommand khác không cần tới.
-    from app.pipeline.dub import DubError, DubOptions, run_dub
+def _resolve_dub_options(
+    args: argparse.Namespace, config: AppConfig, *, prefix: str
+) -> DubOptions | None:
+    """Gộp flag CLI > config thành ``DubOptions``, dùng chung cho ``dub`` và
+    ``playlist`` (CP8) — hai lệnh có cùng bộ flag, xem ``_add_dub_arguments``.
 
+    ``prefix`` chỉ dùng để tiền tố thông báo lỗi (``[dub]``/``[playlist]``).
+    Trả về ``None`` khi validate lỗi — lỗi đã được in ra stderr, người gọi
+    chỉ cần ``return 1`` (không gọi mạng/pipeline khi config sai).
+    """
     workspace = Path(args.workspace) if args.workspace else config.workspace
     source_lang = None if args.source_lang == "auto" else args.source_lang
     shared_glossary = args.glossary if args.glossary is not None else config.translation.glossary
@@ -687,10 +739,14 @@ def _cmd_dub(args: argparse.Namespace, config: AppConfig) -> int:
     try:
         validate_mixing(original_volume, config.mixing.speech_volume, config.mixing.max_shift_seconds)
     except ConfigError as exc:
-        print(f"[dub] LỖI: {exc}", file=sys.stderr)
-        return 1
+        print(f"[{prefix}] LỖI: {exc}", file=sys.stderr)
+        return None
 
-    options = DubOptions(
+    # Import cục bộ: kéo theo yt-dlp/faster-whisper/Ollama/edge-tts, các
+    # subcommand khác (vd download đơn lẻ) không cần tới.
+    from app.pipeline.dub import DubOptions
+
+    return DubOptions(
         workspace=workspace,
         source_lang=source_lang,
         shared_glossary=Path(shared_glossary) if shared_glossary else None,
@@ -698,6 +754,14 @@ def _cmd_dub(args: argparse.Namespace, config: AppConfig) -> int:
         allow_missing=args.allow_missing,
         force=args.force,
     )
+
+
+def _cmd_dub(args: argparse.Namespace, config: AppConfig) -> int:
+    from app.pipeline.dub import DubError, run_dub
+
+    options = _resolve_dub_options(args, config, prefix="dub")
+    if options is None:
+        return 1
     try:
         result = run_dub(
             args.url,
@@ -738,6 +802,99 @@ def _cmd_dub(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
+def _cmd_playlist(args: argparse.Namespace, config: AppConfig) -> int:
+    from app.pipeline.playlist import PlaylistError, PlaylistOptions, parse_item_spec, run_playlist
+
+    dub_options = _resolve_dub_options(args, config, prefix="playlist")
+    if dub_options is None:
+        return 1
+
+    items = None
+    if args.items is not None:
+        try:
+            items = parse_item_spec(args.items)
+        except PlaylistError as exc:
+            # --items sai không được chạm mạng: fetch playlist chỉ xảy ra
+            # sau bước này (đúng "Hành vi bắt buộc" của cp-8.md).
+            print(f"[playlist] LỖI: {exc}", file=sys.stderr)
+            return 1
+
+    playlist_options = PlaylistOptions(
+        dub=dub_options,
+        items=items,
+        recheck=args.recheck,
+        max_consecutive_failures=config.pipeline.max_consecutive_failures,
+        download_only=args.download_only,
+    )
+    try:
+        result = run_playlist(
+            args.url,
+            config,
+            playlist_options,
+            # flush: playlist chạy hàng giờ, log phải thấy ngay cả khi stdout bị pipe/ghi ra file.
+            log=lambda message: print(message, flush=True),
+        )
+    except PlaylistError as exc:
+        print(f"[playlist] LỖI: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        # Không để traceback mặc định của Python lộ ra: người dùng Ctrl+C
+        # giữa một playlist dài là chuyện bình thường, không phải lỗi.
+        print(
+            "[playlist] Đã dừng (Ctrl+C). Chạy lại đúng lệnh này để tiếp tục.",
+            file=sys.stderr,
+        )
+        return 130
+
+    width = max(2, len(str(result.total)))
+    print(f"[playlist] thư mục   : {result.playlist_dir}")
+    print(f"[playlist] {result.total} tập (chọn {result.selected})")
+
+    if args.download_only:
+        # SỬA ĐỔI 1: --download-only chỉ tải, không xử lý -> outcome chỉ có
+        # "downloaded"/"failed"/"not_run" (không "completed"/"skipped").
+        counts = {"downloaded": 0, "failed": 0, "not_run": 0}
+        for episode in result.episodes:
+            counts[episode.outcome] = counts.get(episode.outcome, 0) + 1
+        print(f"[playlist] downloaded {counts['downloaded']} | failed {counts['failed']}")
+    else:
+        counts = {"completed": 0, "skipped": 0, "failed": 0, "not_run": 0}
+        for episode in result.episodes:
+            counts[episode.outcome] = counts.get(episode.outcome, 0) + 1
+        print(
+            f"[playlist] completed {counts['completed']} | skipped {counts['skipped']} | "
+            f"failed {counts['failed']} | not_run {counts['not_run']}"
+        )
+
+    for episode in result.episodes:
+        if episode.outcome != "failed":
+            continue
+        first_line = episode.error.splitlines()[0] if episode.error else ""
+        print(f"[playlist] LỖI  EP{episode.index:0{width}d} {episode.video_id} {first_line}")
+    for episode in result.episodes:
+        # Cảnh báo chỉ cho tập completed TRONG LẦN CHẠY NÀY (episode.result
+        # chỉ có giá trị khi run_dub vừa thật sự chạy — skipped/downloaded không có).
+        if episode.outcome != "completed" or episode.result is None:
+            continue
+        ep_tag = f"EP{episode.index:0{width}d}"
+        if episode.result.translate_failed_ids:
+            ids = ", ".join(str(i) for i in episode.result.translate_failed_ids)
+            print(
+                f"[playlist] CẢNH BÁO {ep_tag}: {len(episode.result.translate_failed_ids)} câu "
+                f"dịch lỗi (id {ids}) — im lặng trong output"
+            )
+        if episode.result.missing_ids:
+            ids = ", ".join(str(i) for i in episode.result.missing_ids)
+            print(
+                f"[playlist] CẢNH BÁO {ep_tag}: {len(episode.result.missing_ids)} segment thiếu "
+                f"audio (id {ids}) — chèn im lặng"
+            )
+
+    if counts["failed"] > 0 or result.aborted:
+        return 1
+    return 0
+
+
 _COMMANDS = {
     "download": _cmd_download,
     "transcribe": _cmd_transcribe,
@@ -747,6 +904,7 @@ _COMMANDS = {
     "normalize": _cmd_normalize,
     "render": _cmd_render,
     "dub": _cmd_dub,
+    "playlist": _cmd_playlist,
 }
 
 

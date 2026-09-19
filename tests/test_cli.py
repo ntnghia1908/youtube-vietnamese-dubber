@@ -22,6 +22,7 @@ from app import cli
 from app.audio.ffmpeg import AudioExtractionError
 from app.audio.render import RenderError, RenderResult
 from app.pipeline.dub import DubError, DubResult
+from app.pipeline.playlist import EpisodeOutcome, PlaylistResult
 from app.transcription.whisper import Segment, TranscriptionError, TranscriptResult
 from app.translation.glossary import GlossaryError, parse_glossary
 from app.translation.glossary_draft import GlossaryDraftResult
@@ -978,6 +979,252 @@ class TestDubSubcommand(unittest.TestCase):
         output = fake_stdout.getvalue()
         self.assertIn("CẢNH BÁO", output)
         self.assertIn("7", output)
+
+
+class TestPlaylistSubcommand(unittest.TestCase):
+    """CP8: subcommand ``playlist`` (patch ``run_playlist``, không chạy thật)."""
+
+    def _episode(self, index: int, video_id: str, outcome: str, **kwargs: object) -> EpisodeOutcome:
+        return EpisodeOutcome(
+            index=index, video_id=video_id, title=f"Ep {index}", outcome=outcome, **kwargs
+        )
+
+    def _dub_result(self, **overrides: object) -> DubResult:
+        base: dict[str, object] = dict(
+            episode_dir=Path("output/pl/vid__Ep"),
+            output_path=Path("output/pl/vid__Ep/output_vi.mp4"),
+            source_language="en",
+            segments=10,
+            translate_failed_ids=[],
+            missing_ids=[],
+            too_long_ids=[],
+            repair_rounds_used=0,
+            glossary_paths=[],
+            stage_seconds={"download": 1.0},
+            skipped_stages=[],
+        )
+        base.update(overrides)
+        return DubResult(**base)  # type: ignore[arg-type]
+
+    def _result(
+        self,
+        episodes: list[EpisodeOutcome],
+        *,
+        aborted: bool = False,
+        total: int | None = None,
+        selected: int | None = None,
+    ) -> PlaylistResult:
+        return PlaylistResult(
+            playlist_dir=Path("output/PLxxx__Series"),
+            total=total if total is not None else len(episodes),
+            selected=selected if selected is not None else len(episodes),
+            episodes=episodes,
+            aborted=aborted,
+        )
+
+    def test_playlist_help_lists_flags(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "app", "playlist", "--help"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        for flag in (
+            "--workspace", "--source-lang", "--glossary", "--original-volume",
+            "--allow-missing", "--force", "--items", "--recheck", "--download-only", "--config",
+        ):
+            self.assertIn(flag, result.stdout)
+
+    def test_playlist_parses_flags(self) -> None:
+        parser = cli.build_parser()
+        args = parser.parse_args(
+            [
+                "playlist", "https://youtube.com/playlist?list=PLxxx",
+                "--items", "1-3,5", "--recheck", "--workspace", "custom", "--download-only",
+            ]
+        )
+        self.assertEqual(args.items, "1-3,5")
+        self.assertTrue(args.recheck)
+        self.assertEqual(args.workspace, "custom")
+        self.assertTrue(args.download_only)
+
+    def test_playlist_download_only_defaults_to_false(self) -> None:
+        parser = cli.build_parser()
+        args = parser.parse_args(["playlist", "https://youtube.com/playlist?list=PLxxx"])
+        self.assertFalse(args.download_only)
+
+    def test_invalid_items_exits_one_without_calling_run_playlist(self) -> None:
+        with (
+            patch("app.pipeline.playlist.run_playlist") as mock_run,
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(
+                ["playlist", "https://youtube.com/playlist?list=PLxxx", "--items", "abc"]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[playlist] LỖI", fake_stderr.getvalue())
+        mock_run.assert_not_called()
+
+    def test_invalid_original_volume_exits_one_without_calling_run_playlist(self) -> None:
+        with (
+            patch("app.pipeline.playlist.run_playlist") as mock_run,
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(
+                [
+                    "playlist", "https://youtube.com/playlist?list=PLxxx",
+                    "--original-volume", "1.5",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[playlist] LỖI", fake_stderr.getvalue())
+        mock_run.assert_not_called()
+
+    def test_flags_override_config(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "c.yaml"
+            config_path.write_text(
+                "translation:\n  model: m\n  glossary: from-config.yaml\n"
+                "mixing:\n  original_volume: 0.2\n",
+                encoding="utf-8",
+            )
+            with (
+                patch(
+                    "app.pipeline.playlist.run_playlist", return_value=self._result([])
+                ) as mock_run,
+                patch("sys.stdout", new_callable=StringIO),
+            ):
+                exit_code = cli.main(
+                    [
+                        "playlist", "https://youtube.com/playlist?list=PLxxx",
+                        "--config", str(config_path),
+                        "--workspace", "output/custom",
+                        "--glossary", "shared.yaml",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        options = mock_run.call_args.args[2]
+        self.assertEqual(options.dub.workspace, Path("output/custom"))
+        self.assertEqual(options.dub.shared_glossary, Path("shared.yaml"))
+
+    def test_exit_zero_when_no_failed_no_aborted(self) -> None:
+        episodes = [
+            self._episode(1, "v1", "completed", result=self._dub_result()),
+            self._episode(2, "v2", "completed", result=self._dub_result()),
+            self._episode(3, "v3", "skipped"),
+        ]
+        with (
+            patch("app.pipeline.playlist.run_playlist", return_value=self._result(episodes)),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["playlist", "https://youtube.com/playlist?list=PLxxx"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("completed 2 | skipped 1 | failed 0", output)
+
+    def test_exit_one_when_failed_present(self) -> None:
+        episodes = [
+            self._episode(1, "v1", "completed", result=self._dub_result()),
+            self._episode(
+                2, "v2", "failed",
+                error_stage="translate", error="[translate] Không kết nối được Ollama",
+            ),
+        ]
+        with (
+            patch("app.pipeline.playlist.run_playlist", return_value=self._result(episodes)),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["playlist", "https://youtube.com/playlist?list=PLxxx"])
+
+        self.assertEqual(exit_code, 1)
+        output = fake_stdout.getvalue()
+        self.assertIn("[playlist] LỖI  EP02 v2 [translate] Không kết nối được Ollama", output)
+
+    def test_exit_one_when_aborted(self) -> None:
+        episodes = [
+            self._episode(1, "v1", "failed", error_stage="translate", error="[translate] boom")
+        ]
+        with (
+            patch(
+                "app.pipeline.playlist.run_playlist",
+                return_value=self._result(episodes, aborted=True),
+            ),
+            patch("sys.stdout", new_callable=StringIO),
+        ):
+            exit_code = cli.main(["playlist", "https://youtube.com/playlist?list=PLxxx"])
+
+        self.assertEqual(exit_code, 1)
+
+    def test_keyboard_interrupt_exits_130(self) -> None:
+        with (
+            patch("app.pipeline.playlist.run_playlist", side_effect=KeyboardInterrupt()),
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(["playlist", "https://youtube.com/playlist?list=PLxxx"])
+
+        self.assertEqual(exit_code, 130)
+        self.assertIn("Ctrl+C", fake_stderr.getvalue())
+
+    def test_warns_on_translate_failed_and_missing_ids_for_completed_only(self) -> None:
+        episodes = [
+            self._episode(3, "v3", "completed", result=self._dub_result(translate_failed_ids=[4, 9])),
+            self._episode(5, "v5", "completed", result=self._dub_result(missing_ids=[12])),
+        ]
+        with (
+            patch(
+                "app.pipeline.playlist.run_playlist",
+                return_value=self._result(episodes, total=5, selected=2),
+            ),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["playlist", "https://youtube.com/playlist?list=PLxxx"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("CẢNH BÁO EP03: 2 câu dịch lỗi (id 4, 9)", output)
+        self.assertIn("CẢNH BÁO EP05: 1 segment thiếu audio (id 12)", output)
+
+    def test_download_only_flag_passed_to_playlist_options(self) -> None:
+        with (
+            patch(
+                "app.pipeline.playlist.run_playlist", return_value=self._result([])
+            ) as mock_run,
+            patch("sys.stdout", new_callable=StringIO),
+        ):
+            cli.main(
+                ["playlist", "https://youtube.com/playlist?list=PLxxx", "--download-only"]
+            )
+
+        options = mock_run.call_args.args[2]
+        self.assertTrue(options.download_only)
+
+    def test_download_only_summary_uses_downloaded_failed_line(self) -> None:
+        episodes = [
+            self._episode(1, "v1", "downloaded"),
+            self._episode(2, "v2", "failed", error_stage="download", error="[download] boom"),
+        ]
+        with (
+            patch(
+                "app.pipeline.playlist.run_playlist", return_value=self._result(episodes)
+            ),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(
+                ["playlist", "https://youtube.com/playlist?list=PLxxx", "--download-only"]
+            )
+
+        self.assertEqual(exit_code, 1)
+        output = fake_stdout.getvalue()
+        self.assertIn("downloaded 1 | failed 1", output)
+        self.assertNotIn("completed", output)
+        self.assertIn("[playlist] LỖI  EP02 v2 [download] boom", output)
 
 
 if __name__ == "__main__":

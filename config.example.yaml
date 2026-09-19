@@ -45,3 +45,4 @@ mixing:
 
 pipeline:
   repair_rounds: 2   # `dub`: số vòng tối đa chạy lại translate (câu dịch lỗi) và tts+normalize (thiếu audio); 0 = không thử lại
+  max_consecutive_failures: 3   # `playlist`: dừng sau N tập lỗi liên tiếp (lỗi hệ thống: Ollama tắt, hết mạng...); 0 = không dừng

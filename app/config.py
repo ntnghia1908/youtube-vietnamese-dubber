@@ -76,6 +76,10 @@ class PipelineConfig:
     # `dub` (CP7): số vòng tối đa chạy lại translate (câu dịch lỗi) và
     # tts+normalize (thiếu audio) trước khi render; 0 = không thử lại.
     repair_rounds: int = 2
+    # `playlist` (CP8): dừng sớm sau N tập lỗi LIÊN TIẾP (lỗi hệ thống —
+    # Ollama tắt, mất mạng — nhiều khả năng lặp lại y hệt ở các tập sau,
+    # chạy tiếp chỉ tốn thời gian); 0 = không bao giờ dừng sớm.
+    max_consecutive_failures: int = 3
 
 
 @dataclass(frozen=True)
@@ -143,6 +147,7 @@ _MIXING_TYPES: dict[str, tuple[type | None, ...]] = {
 }
 _PIPELINE_TYPES: dict[str, tuple[type | None, ...]] = {
     "repair_rounds": (int,),
+    "max_consecutive_failures": (int,),
 }
 # vd "+0%", "-10%", "+100%". YAML `rate: +0%` không quote vẫn parse ra str,
 # nhưng thiếu dấu % (`rate: 0%` thành số 0 hoặc thiếu dấu +/-) là lỗi hay gặp.
@@ -313,6 +318,11 @@ def parse_config(data: Any) -> AppConfig:
     if pipeline.repair_rounds < 0:
         raise ConfigError(
             f"`pipeline.repair_rounds` không được âm (đang là {pipeline.repair_rounds})."
+        )
+    if pipeline.max_consecutive_failures < 0:
+        raise ConfigError(
+            "`pipeline.max_consecutive_failures` không được âm (đang là "
+            f"{pipeline.max_consecutive_failures})."
         )
     kwargs["pipeline"] = pipeline
 

@@ -155,9 +155,13 @@ class DubPipelineTestCase(unittest.TestCase):
             self.addCleanup(patcher.stop)
         return mocks
 
-    def _run(self, options: DubOptions | None = None):
+    def _run(self, options: DubOptions | None = None, episode: EpisodeInfo | None = None):
         return run_dub(
-            "https://youtu.be/vid001", self.config, options or self.options, log=self._log
+            "https://youtu.be/vid001",
+            self.config,
+            options or self.options,
+            log=self._log,
+            episode=episode,
         )
 
 
@@ -443,6 +447,28 @@ class TestStageErrors(DubPipelineTestCase):
         with self.assertRaises(DubError) as ctx:
             self._run()
         self.assertEqual(ctx.exception.stage, "render")
+
+
+class TestPreDownloadedEpisode(DubPipelineTestCase):
+    """Test 14 (CP8 SỬA ĐỔI 1): ``episode=`` bỏ qua hoàn toàn download_video."""
+
+    def test_episode_kwarg_skips_download_video_entirely(self) -> None:
+        pre_downloaded = _episode_info(self.episode_dir)
+        mocks = self._patch_all()
+
+        result = self._run(episode=pre_downloaded)
+
+        mocks["download_video"].assert_not_called()
+        self.assertIn("download", result.skipped_stages)
+        self.assertEqual(result.stage_seconds["download"], 0.0)
+        self.assertEqual(result.episode_dir, self.episode_dir)
+
+    def test_episode_kwarg_none_keeps_cp7_behavior(self) -> None:
+        mocks = self._patch_all()
+
+        self._run(episode=None)
+
+        mocks["download_video"].assert_called_once()
 
 
 class TestSkippedStages(DubPipelineTestCase):

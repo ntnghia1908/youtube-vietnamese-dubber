@@ -18,6 +18,7 @@ from app.youtube.download import (
     _download_source,
     build_episode_dir_name,
     download_video,
+    load_episode_info,
     sanitize_filename,
 )
 
@@ -131,6 +132,61 @@ class TestDownloadVideo(unittest.TestCase):
             ):
                 with self.assertRaises(VideoDownloadError):
                     download_video("https://youtu.be/broken", workspace)
+
+
+class TestLoadEpisodeInfo(unittest.TestCase):
+    """CP8 SỬA ĐỔI 1: dựng lại ``EpisodeInfo`` từ ``metadata.json``, không mạng."""
+
+    def test_builds_episode_info_from_existing_metadata(self) -> None:
+        with TemporaryDirectory() as tmp:
+            episode_dir = Path(tmp) / "vid001__Video Demo"
+            episode_dir.mkdir()
+            (episode_dir / "metadata.json").write_text(
+                json.dumps({"id": "vid001", "title": "Video Demo"}), encoding="utf-8"
+            )
+
+            episode = load_episode_info(episode_dir, "https://youtu.be/vid001")
+
+            self.assertEqual(episode.video_id, "vid001")
+            self.assertEqual(episode.title, "Video Demo")
+            self.assertEqual(episode.source_path, episode_dir / "source.mp4")
+            self.assertEqual(episode.source_url, "https://youtu.be/vid001")
+
+    def test_missing_title_defaults_to_untitled(self) -> None:
+        with TemporaryDirectory() as tmp:
+            episode_dir = Path(tmp) / "vid001__x"
+            episode_dir.mkdir()
+            (episode_dir / "metadata.json").write_text(
+                json.dumps({"id": "vid001"}), encoding="utf-8"
+            )
+
+            episode = load_episode_info(episode_dir, "https://youtu.be/vid001")
+            self.assertEqual(episode.title, "untitled")
+
+    def test_missing_metadata_file_raises(self) -> None:
+        with TemporaryDirectory() as tmp:
+            episode_dir = Path(tmp) / "vid001__x"
+            episode_dir.mkdir()
+            with self.assertRaises(VideoDownloadError):
+                load_episode_info(episode_dir, "https://youtu.be/vid001")
+
+    def test_broken_metadata_json_raises(self) -> None:
+        with TemporaryDirectory() as tmp:
+            episode_dir = Path(tmp) / "vid001__x"
+            episode_dir.mkdir()
+            (episode_dir / "metadata.json").write_text("{ khong hop le", encoding="utf-8")
+            with self.assertRaises(VideoDownloadError):
+                load_episode_info(episode_dir, "https://youtu.be/vid001")
+
+    def test_missing_id_in_metadata_raises(self) -> None:
+        with TemporaryDirectory() as tmp:
+            episode_dir = Path(tmp) / "vid001__x"
+            episode_dir.mkdir()
+            (episode_dir / "metadata.json").write_text(
+                json.dumps({"title": "Không có id"}), encoding="utf-8"
+            )
+            with self.assertRaises(VideoDownloadError):
+                load_episode_info(episode_dir, "https://youtu.be/vid001")
 
 
 class TestDownloadFormatSelector(unittest.TestCase):

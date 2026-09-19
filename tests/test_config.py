@@ -226,6 +226,22 @@ class TestParseConfig(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "repair_roundz"):
             parse_config({"pipeline": {"repair_roundz": 1}})
 
+    def test_pipeline_max_consecutive_failures_default(self) -> None:
+        self.assertEqual(parse_config(None).pipeline.max_consecutive_failures, 3)
+
+    def test_pipeline_max_consecutive_failures_reads_zero(self) -> None:
+        config = parse_config({"pipeline": {"max_consecutive_failures": 0}})
+        self.assertEqual(config.pipeline.max_consecutive_failures, 0)
+
+    def test_pipeline_rejects_negative_max_consecutive_failures(self) -> None:
+        with self.assertRaises(ConfigError):
+            parse_config({"pipeline": {"max_consecutive_failures": -1}})
+
+    def test_pipeline_rejects_wrong_type_max_consecutive_failures(self) -> None:
+        for value in ("3", True, 1.5):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                parse_config({"pipeline": {"max_consecutive_failures": value}})
+
     def test_unknown_section_message_lists_pipeline(self) -> None:
         with self.assertRaisesRegex(ConfigError, "pipeline"):
             parse_config({"piplin": {}})

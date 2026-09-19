@@ -12,6 +12,12 @@ Hai việc dub tự điều phối mà các stage không tự làm:
   gọi lại ``tts`` rồi ``normalize`` (không ``force``) tới khi hết hoặc hết
   số vòng (CP5 A3 / CP6 A2: ``render_episode`` không tự chạy lại stage
   trước).
+
+CP8 SỬA ĐỔI 1: tham số ``episode=`` cho phép ``playlist`` tải video ở một
+luồng riêng (song song với xử lý tập trước) rồi truyền thẳng ``EpisodeInfo``
+vào đây — bỏ qua hoàn toàn ``download_video`` (không gọi mạng YouTube lần
+2). ``dub`` đơn lẻ không dùng tham số này (luôn ``None``), hành vi CP7
+không đổi.
 """
 
 from __future__ import annotations
@@ -39,7 +45,7 @@ from app.translation.translate import TRANSLATED_FILENAME, translate_transcript
 from app.tts import create_tts_engine
 from app.tts.base import TTSError
 from app.tts.synthesize import TTS_DIRNAME, synthesize_translation
-from app.youtube.download import VideoDownloadError, download_video
+from app.youtube.download import EpisodeInfo, VideoDownloadError, download_video
 
 STAGES = ("download", "transcribe", "translate", "tts", "normalize", "render")
 
@@ -94,11 +100,18 @@ def run_dub(
     options: DubOptions,
     *,
     log: Callable[[str], None] = print,
+    episode: EpisodeInfo | None = None,
 ) -> DubResult:
     """Chạy toàn bộ pipeline cho một video, trả về tóm tắt kết quả.
 
     Mỗi stage bọc lỗi riêng của nó thành ``DubError(stage, message)`` để
     người gọi (CLI) biết chính xác đứt ở đâu và lệnh nào chạy lại.
+
+    ``episode``: khác ``None`` nghĩa là video đã được tải sẵn (CP8 SỬA ĐỔI
+    1 — luồng tải riêng của ``playlist``) — bỏ qua hoàn toàn
+    ``download_video`` (không gọi mạng YouTube lần 2), dùng thẳng
+    ``EpisodeInfo`` này. ``None`` (mặc định, dùng bởi ``dub`` đơn lẻ) giữ
+    nguyên hành vi CP7.
     """
     total = len(STAGES)
 
@@ -132,26 +145,33 @@ def run_dub(
     # --- 1. download ---
     _log_start(log, 1, total, "download")
     started = time.monotonic()
-    # Mốc thời gian *trước* khi gọi download_video: episode_dir chỉ được biết
-    # sau lệnh gọi (yt-dlp trả metadata), nên không thể exists() trước như các
-    # stage sau — suy ra "đã có từ trước" bằng cách so mtime của source.mp4
-    # với mốc này (file cũ hơn mốc = không bị tải lại).
-    download_started_at = time.time()
-    try:
-        episode = download_video(url, options.workspace, force=options.force)
-    except VideoDownloadError as exc:
-        raise DubError("download", str(exc)) from exc
-    download_skipped = (
-        not options.force
-        and episode.source_path.exists()
-        and episode.source_path.stat().st_mtime < download_started_at
-    )
-    stage_seconds["download"] = time.monotonic() - started
+    if episode is not None:
+        # CP8 SỬA ĐỔI 1: đã tải sẵn ở luồng riêng của `playlist` — 0s, không
+        # có gì để đo/so mtime (khác nhánh dưới, đây không gọi mạng).
+        episode_info = episode
+        download_skipped = True
+        stage_seconds["download"] = 0.0
+    else:
+        # Mốc thời gian *trước* khi gọi download_video: episode_dir chỉ được
+        # biết sau lệnh gọi (yt-dlp trả metadata), nên không thể exists()
+        # trước như các stage sau — suy ra "đã có từ trước" bằng cách so
+        # mtime của source.mp4 với mốc này (file cũ hơn mốc = không bị tải lại).
+        download_started_at = time.time()
+        try:
+            episode_info = download_video(url, options.workspace, force=options.force)
+        except VideoDownloadError as exc:
+            raise DubError("download", str(exc)) from exc
+        download_skipped = (
+            not options.force
+            and episode_info.source_path.exists()
+            and episode_info.source_path.stat().st_mtime < download_started_at
+        )
+        stage_seconds["download"] = time.monotonic() - started
     if download_skipped:
         skipped_stages.append("download")
     _log_done(log, 1, total, "download", stage_seconds["download"], download_skipped)
 
-    episode_dir = episode.episode_dir
+    episode_dir = episode_info.episode_dir
     audio_path = episode_dir / AUDIO_FILENAME
     transcript_path = episode_dir / TRANSCRIPT_FILENAME
     translated_path = episode_dir / TRANSLATED_FILENAME
@@ -162,7 +182,7 @@ def run_dub(
     started = time.monotonic()
     transcript_existed = transcript_path.exists()
     try:
-        extract_audio(episode.source_path, audio_path, force=options.force)
+        extract_audio(episode_info.source_path, audio_path, force=options.force)
         transcribe_result = transcribe_audio(
             audio_path,
             transcript_path,

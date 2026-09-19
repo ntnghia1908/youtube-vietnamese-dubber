@@ -1,10 +1,13 @@
 """Logic tải video YouTube (yt-dlp) — Checkpoint 1.
 
-Chỉ hỗ trợ một video đơn lẻ. Playlist sẽ được xử lý ở checkpoint sau
-(xem docs/IMPLEMENTATION_PLAN.md, mục Checkpoint 8).
+Chỉ hỗ trợ một video đơn lẻ. Lấy danh sách video của một playlist là việc
+của ``app/youtube/playlist.py`` (Checkpoint 8) — module đó tái sử dụng
+``_SilentYtdlpLogger`` ở đây, không copy lại.
 
 Resume: nếu ``source.mp4`` của episode đã tồn tại thì không tải lại,
-trừ khi gọi với ``force=True``.
+trừ khi gọi với ``force=True``. ``load_episode_info`` (CP8 SỬA ĐỔI 1) dựng
+lại ``EpisodeInfo`` từ ``metadata.json`` mà không gọi mạng — dùng khi luồng
+tải riêng của ``playlist`` biết chắc tập đã tải xong từ lần chạy trước.
 """
 
 from __future__ import annotations
@@ -193,4 +196,35 @@ def download_video(url: str, workspace_dir: Path, *, force: bool = False) -> Epi
         episode_dir=episode_dir,
         metadata_path=metadata_path,
         source_path=source_path,
+    )
+
+
+def load_episode_info(episode_dir: Path, url: str) -> EpisodeInfo:
+    """Dựng lại ``EpisodeInfo`` từ ``metadata.json`` đã có, KHÔNG gọi mạng.
+
+    CP8 (SỬA ĐỔI 1): luồng tải của playlist dùng hàm này khi một tập đã
+    ``downloaded`` từ lần chạy trước (``source.mp4``/``metadata.json`` còn
+    trên đĩa) — tránh gọi lại ``_extract_info`` (tốn một lượt mạng mỗi tập
+    mỗi lần chạy `playlist`, dù không tải lại file).
+    """
+    metadata_path = episode_dir / METADATA_FILENAME
+    if not metadata_path.exists():
+        raise VideoDownloadError(f"Không tìm thấy {metadata_path} — tải lại tập này.")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VideoDownloadError(f"Không đọc được {metadata_path}: {exc}") from exc
+
+    video_id = metadata.get("id")
+    if not video_id:
+        raise VideoDownloadError(f"{metadata_path} thiếu trường 'id'.")
+    title = metadata.get("title") or "untitled"
+
+    return EpisodeInfo(
+        video_id=video_id,
+        title=title,
+        source_url=url,
+        episode_dir=episode_dir,
+        metadata_path=metadata_path,
+        source_path=episode_dir / SOURCE_FILENAME,
     )
