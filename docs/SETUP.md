@@ -63,9 +63,24 @@ Chưa cần nếu chỉ chạy tới Checkpoint 2 (download + transcribe).
 Tải tại <https://ollama.com/download>, sau đó kéo model dịch về:
 
 ```bash
-ollama pull qwen3:8b       # model mac dinh theo docs/IMPLEMENTATION_PLAN.md muc 10
-ollama list                # phai thay qwen3:8b trong danh sach
+ollama pull gemma3:12b     # model dich da chot o CP6.5 (docs/decisions/checkpoint-6.5.md)
+ollama list                # phai thay gemma3:12b trong danh sach
 ```
+
+Không dùng `qwen3:8b` làm model dịch chính: trên video thử của CP6.5 nó
+dịch sai xưng hô ba–con ở 0/13 câu, `gemma3:12b` đúng 13/13.
+
+**Kiểm tra Ollama có dùng GPU không** (máy có GPU NVIDIA). Chạy một lệnh
+dịch rồi xem `ollama ps` khi model còn nạp:
+
+```bash
+ollama ps        # cot PROCESSOR: "100% CPU" = KHONG dung GPU; "61%/39% CPU/GPU" la dang offload
+```
+
+`gemma3:12b` nặng ~8,9 GB nên card 6 GB VRAM (RTX 3050) chỉ offload được
+khoảng 37% layer: đo thực tế 263 s cho video 244 s (~64,7 s / phút video,
+~11,3 giờ cho playlist 630 phút), so với 382 s khi chạy CPU thuần. Card
+VRAM lớn hơn sẽ nhanh hơn nhiều.
 
 ### A5. Kết nối mạng cho TTS — cần cho Checkpoint 4 trở đi
 
@@ -252,6 +267,7 @@ của Whisper từng nhận nhầm một video tiếng Trung thành `en` (confid
 | `UnicodeEncodeError` khi in tiếng Việt/tiếng Trung | Console Windows dùng cp1252. Đặt `PYTHONIOENCODING=utf-8`. Chạy qua `python -m app` thì không bị |
 | `ModuleNotFoundError: faster_whisper` | Đang dùng `python` trần thay vì python trong `.venv` |
 | Lỗi cuDNN/CUDA khi `--device cuda` (vd `cublas64_12.dll is not found`) | Thiếu CUDA Toolkit 12.x hoặc cuDNN 9 — có driver/GPU không có nghĩa là đã có hai thứ này. Cài theo mục A6. Tạm thời dùng `--device cpu` trong lúc chờ cài |
+| `ollama ps` báo `100% CPU` dù `nvidia-smi` thấy GPU | Bản cài Ollama dở dang (từng gặp: cập nhật bị ngắt, thiếu `ggml-cuda.dll`). Xem `%LOCALAPPDATA%\Ollama\server.log`: dòng `inference compute` phải có `library=CUDA`, nếu là `library=cpu ... total_vram="0 B"` thì kiểm tra `%LOCALAPPDATA%\Programs\Ollama\lib\ollama\cuda_v12\ggml-cuda.dll` có tồn tại không (file rác `is-*.tmp` cỡ vài trăm MB là dấu hiệu cập nhật hỏng). Cách sửa: tắt Ollama rồi cài đè `OllamaSetup.exe` mới nhất từ ollama.com, sau đó kiểm tra lại `ollama ps`. Mọi số đo thời gian dịch lúc còn 100% CPU đều phải đo lại |
 
 ---
 
@@ -265,7 +281,8 @@ Môi trường được coi là sẵn sàng khi **tất cả** dòng dưới đ�
 - [ ] Test suite pass toàn bộ
 - [ ] Smoke test B4 tạo ra `source.mp4` **có audio stream**
 - [ ] `transcript.json` đọc được, đúng ngôn ngữ
-- [ ] (CP3 trở đi) `ollama list` thấy model dịch
+- [ ] (CP3 trở đi) `ollama list` thấy `gemma3:12b`; nếu máy có GPU thì
+      `ollama ps` khi đang dịch không được là `100% CPU` (xem mục A4)
 - [ ] (CP4 trở đi) máy có mạng ra ngoài; `python -m app tts <episode_dir>`
       tạo được `tts/*.mp3` nghe được (xem mục A5)
 - [ ] (CP5 trở đi) `python -m app normalize <episode_dir>` tạo được
@@ -276,3 +293,7 @@ Môi trường được coi là sẵn sàng khi **tất cả** dòng dưới đ�
       đúng 1 stream video và 1 stream `aac`, độ dài ≈ `source.mp4`; chạy
       lần 2 in `SKIP` cho cả hai. Mở `output_vi.mp4` nghe thử, không chỉ
       nhìn exit code
+- [ ] (CP6.5 trở đi) `python -m app glossary <episode_dir>` tạo được
+      `glossary.yaml` mở ra đọc được (có tên nhân vật + xưng hô hợp lý);
+      chạy lần 2 in `SKIP`. Sửa glossary rồi chạy lại `translate` thì thấy
+      dòng "glossary đã thay đổi kể từ lần dịch — dịch lại từ đầu"

@@ -59,7 +59,7 @@ Model, API key, đường dẫn đặc thù máy: tất cả phải qua config h
 .venv/Scripts/python.exe -m app --help
 ```
 
-Ba cái bẫy đã mất thời gian vì nó:
+Bốn cái bẫy đã mất thời gian vì nó:
 
 - **ffmpeg báo "không tìm thấy"** → khả năng cao shell đang giữ PATH cũ
   chứ không phải chưa cài. Kiểm tra PATH bền vững
@@ -71,6 +71,10 @@ Ba cái bẫy đã mất thời gian vì nó:
 - **Video không phải tiếng Anh** → luôn truyền `--source-lang`.
   Auto-detect từng nhận nhầm `zh` thành `en` (confidence 0.562) rồi
   *dịch bịa* sang tiếng Anh thay vì phiên âm tiếng gốc.
+- **Số đo tốc độ dịch bất thường (chậm)** → chạy `ollama ps` xem cột
+  PROCESSOR trước. Từng chạy cả CP6.5 với `100% CPU` mà không biết vì bản
+  cài Ollama dở dang (thiếu `ggml-cuda.dll`, `nvidia-smi` vẫn thấy GPU
+  bình thường). Cách kiểm/sửa ở `docs/SETUP.md` bảng "Lỗi thường gặp".
 
 ---
 
@@ -116,6 +120,15 @@ phối: sau `normalize` nếu `missing_ids` khác rỗng thì chạy lại `tts`
 số mix lấy từ `config.mixing`, validate bằng `validate_mixing`. Video
 không phải tiếng Anh: `dub` phải nhận `--source-lang` (bẫy auto-detect ở
 mục Lệnh hay dùng).
+
+Từ CP6.5 (đọc mục A của `docs/decisions/checkpoint-6.5.md`): `dub` phải
+gọi `load_effective_glossary(episode_dir, shared)` rồi truyền
+`glossary=` vào `translate_transcript`, bắt `GlossaryError` chung với
+`TranslationError`. `dub` **không** tự chạy `glossary` (nháp do model tạo
+mà người dùng chưa duyệt sẽ bị dịch luôn) — thiếu `<ep>/glossary.yaml` thì
+chỉ in một dòng nhắc chạy `python -m app glossary "<ep>"`. Glossary đổi thì
+`translate` tự dịch lại, `tts` chỉ làm lại câu có text đổi. Model dịch đã
+chốt `gemma3:12b` (`timeout_seconds: 900`): `qwen3:8b` trượt xưng hô ba–con.
 
 Còn nợ từ CP6: chưa nghe bằng tai `output_vi.mp4` — nghe quanh 0:33–0:36
 (id 8, tempo 1.25) để quyết có hạ `timing.max_tempo` không, và thử

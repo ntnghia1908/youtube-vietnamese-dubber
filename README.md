@@ -12,7 +12,7 @@ Kiến trúc pipeline đầy đủ, nguyên tắc thiết kế và lộ trình t
 checkpoint được mô tả chi tiết tại
 [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
-## Trạng thái hiện tại — Checkpoint 6: Build voice track + render
+## Trạng thái hiện tại — Checkpoint 6.5: Glossary + chốt model dịch
 
 Đã có:
 
@@ -36,6 +36,11 @@ checkpoint được mô tả chi tiết tại
 - Subcommand `render`: đặt audio từng segment vào đúng timestamp thành
   `voice_track.wav`, mix với audio gốc (hạ volume), giữ nguyên video
   stream, xuất `output_vi.mp4` (Checkpoint 6).
+- Subcommand `glossary` + `translate --glossary`: model tạo *nháp*
+  `glossary.yaml` (nhân vật, cách Whisper nghe sai tên, xưng hô, thuật
+  ngữ), người dùng sửa tay, `translate` đọc file đó để dịch đúng tên và
+  xưng hô; sửa glossary thì `translate` tự dịch lại. Model dịch đã chốt là
+  `gemma3:12b` (Checkpoint 6.5).
 
 Chưa có: pipeline end-to-end một lệnh từ URL (Checkpoint 7), playlist
 (Checkpoint 8). Chất lượng giọng/độ to audio gốc trong `output_vi.mp4`
@@ -51,7 +56,9 @@ mới được kiểm bằng số liệu, chưa nghe bằng tai người.
   với ffmpeg 7.1.1; bản quá cũ có thể thiếu option `normalize` của filter
   `amix`.
 - [Ollama](https://ollama.com/download) đang chạy, đã `ollama pull` model
-  dịch (vd `qwen3:8b`) — cần cho subcommand `translate`.
+  dịch (khuyến nghị `gemma3:12b`) — cần cho subcommand `translate` và
+  `glossary`. Nên có GPU NVIDIA: `ollama ps` phải hiện `GPU` ở cột
+  PROCESSOR, không phải `100% CPU` (xem `docs/SETUP.md` mục A4).
 - Kết nối mạng khi chạy subcommand `tts` — `edge-tts` gọi dịch vụ giọng
   đọc của Microsoft Edge qua WebSocket (miễn phí, không cần API key).
 
@@ -102,7 +109,14 @@ python -m app transcribe "output/VIDEO_ID__title" --source-lang zh
 python -m app translate "output/VIDEO_ID__title"
 
 # Chọn model/batch khác + ép dịch lại từ đầu
-python -m app translate "output/VIDEO_ID__title" --model qwen3:8b --batch-size 20 --force
+python -m app translate "output/VIDEO_ID__title" --model gemma3:12b --batch-size 20 --force
+
+# Tạo NHÁP glossary.yaml (nhân vật, xưng hô, thuật ngữ) từ transcript.json
+# — mở file sửa tay rồi mới chạy translate; đã có glossary.yaml thì SKIP
+python -m app glossary "output/VIDEO_ID__title"
+
+# Thêm glossary dùng chung cho cả series (gộp với <episode>/glossary.yaml)
+python -m app translate "output/VIDEO_ID__title" --glossary ./series-glossary.yaml
 
 # Tổng hợp giọng tiếng Việt (edge-tts) cho từng segment đã dịch
 python -m app tts "output/VIDEO_ID__title"
@@ -132,6 +146,19 @@ Nên dùng `--source-lang` cho video không phải tiếng Anh: auto-detect củ
 Whisper có thể đoán sai với confidence thấp (nhạc nền ở đầu video), khiến
 toàn bộ transcript bị *dịch* sang ngôn ngữ đoán nhầm thay vì phiên âm
 đúng tiếng gốc.
+
+`glossary.yaml` có 5 mục: `context`, `characters` (tên chuẩn + `aliases` là
+các cách Whisper nghe sai, được thay bằng tên chuẩn trước khi dịch),
+`address` (xưng hô: ai nói với ai, tự xưng gì, gọi đối phương gì), `terms`
+(thuật ngữ cố định) và `skip` (câu chứa chuỗi này bị bỏ, không dịch, không
+đọc — vd lời kêu gọi Patreon cuối video). Lệnh `glossary` **không bao giờ**
+tự điền `skip` (bỏ câu là mất thoại, chỉ người dùng được quyết); `--force`
+tạo lại và lưu bản cũ ra `glossary.yaml.bak`. Sửa nội dung glossary (thêm
+comment/khoảng trắng thì không tính) làm `translate` tự dịch lại từ đầu
+không cần `--force`, và `tts` chỉ tổng hợp lại các câu có text đổi.
+Model nhỏ hơn dễ trượt xưng hô: `qwen3:8b` dịch "I love you" của cặp
+ba–con thành "Mình yêu em" ở 0/13 câu, `gemma3:12b` đúng 13/13 — số liệu
+trong `docs/decisions/checkpoint-6.5.md`.
 
 `tts` tổng hợp song song (mặc định 4 segment cùng lúc), cache theo từng
 segment (`hash(provider + voice + rate + volume + text)`): sửa một câu
@@ -177,7 +204,7 @@ python -m unittest discover -s tests
 youtube-vietnamese-dubber/
 ├── app/                  # Source code chính (package "app")
 │   ├── __main__.py       # Cho phép chạy `python -m app`
-│   ├── cli.py            # CLI (argparse); subcommand download, transcribe, translate, tts, normalize, render
+│   ├── cli.py            # CLI (argparse); subcommand download, transcribe, translate, glossary, tts, normalize, render
 │   ├── config.py         # load_config(): config.yaml -> AppConfig
 │   ├── youtube/          # Stage: metadata & download video (yt-dlp)
 │   │   └── download.py   # download_video(): metadata.json + source.mp4, có resume
@@ -188,7 +215,9 @@ youtube-vietnamese-dubber/
 │   │   └── whisper.py    # transcribe_audio(): audio.wav -> transcript.json, có resume
 │   ├── translation/      # Stage: dịch thuật
 │   │   ├── base.py       # Translator (abstraction) + validate output model
-│   │   ├── prompt.py     # prompt + JSON schema dùng chung
+│   │   ├── prompt.py     # prompt + JSON schema dùng chung (kèm khối glossary)
+│   │   ├── glossary.py   # Glossary: parse/validate glossary.yaml, gộp 2 tầng, hash, sửa alias
+│   │   ├── glossary_draft.py # draft_glossary_file(): model tạo nháp glossary.yaml
 │   │   ├── ollama.py     # OllamaTranslator
 │   │   └── translate.py  # translate_transcript(): transcript.json -> translated.json, có resume
 │   ├── tts/              # Stage: text-to-speech tiếng Việt (edge-tts)
