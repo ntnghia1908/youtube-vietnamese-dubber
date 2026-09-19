@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 from app import cli
 from app.audio.ffmpeg import AudioExtractionError
+from app.audio.render import RenderError, RenderResult
 from app.transcription.whisper import Segment, TranscriptionError, TranscriptResult
 from app.translation.translate import TranslatedSegment, TranslationResult
 from app.synchronization.timing import TimingError, TimingResult
@@ -407,6 +408,157 @@ class TestNormalizeSubcommand(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("manifest.json", fake_stderr.getvalue())
+
+
+class TestRenderSubcommand(unittest.TestCase):
+    def _result(
+        self,
+        *,
+        missing_ids: list[int] | None = None,
+        shifted_ids: list[int] | None = None,
+        overlap_ids: list[int] | None = None,
+    ) -> RenderResult:
+        return RenderResult(
+            voice_track_path=Path("output/ep/voice_track.wav"),
+            output_path=Path("output/ep/output_vi.mp4"),
+            render_path=Path("output/ep/render.json"),
+            placed_ids=[1, 2, 3],
+            silent_ids=[4],
+            missing_ids=missing_ids or [],
+            shifted_ids=shifted_ids or [],
+            overlap_ids=overlap_ids or [],
+            max_shift_seen=0.51 if shifted_ids else 0.0,
+            duration=12.0,
+            voice_track_skipped=False,
+            output_skipped=False,
+        )
+
+    def test_render_help_runs(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "app", "render", "--help"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("--original-volume", result.stdout)
+        self.assertIn("--allow-missing", result.stdout)
+
+    def test_render_prints_report(self) -> None:
+        with (
+            patch(
+                "app.audio.render.render_episode",
+                return_value=self._result(shifted_ids=[9, 19], overlap_ids=[9]),
+            ),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["render", "output/ep"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("[render] segments     : 4", output)
+        self.assertIn("[render] placed       : 3", output)
+        self.assertIn("[render] silent       : 1", output)
+        self.assertIn("[render] missing      : 0", output)
+        self.assertIn("[render] shifted      : 2 (tối đa 0.51s)", output)
+        self.assertIn("[render] overlap      : 1 (id 9)", output)
+        self.assertIn("voice_track.wav", output)
+        self.assertIn("output_vi.mp4", output)
+        self.assertNotIn("CẢNH BÁO", output)
+
+    def test_render_warns_when_missing_ids_allowed(self) -> None:
+        with (
+            patch(
+                "app.audio.render.render_episode",
+                return_value=self._result(missing_ids=[5, 6]),
+            ),
+            patch("sys.stdout", new_callable=StringIO) as fake_stdout,
+        ):
+            exit_code = cli.main(["render", "output/ep", "--allow-missing"])
+
+        self.assertEqual(exit_code, 0)
+        output = fake_stdout.getvalue()
+        self.assertIn("CẢNH BÁO", output)
+        self.assertIn("5, 6", output)
+
+    def test_render_passes_flags_to_render_episode(self) -> None:
+        with (
+            patch(
+                "app.audio.render.render_episode", return_value=self._result()
+            ) as fake_render,
+            patch("sys.stdout", new_callable=StringIO),
+        ):
+            exit_code = cli.main(
+                [
+                    "render", "output/ep",
+                    "--original-volume", "0.5",
+                    "--max-shift", "0",
+                    "--allow-missing",
+                    "--force",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        kwargs = fake_render.call_args.kwargs
+        self.assertEqual(kwargs["original_volume"], 0.5)
+        self.assertEqual(kwargs["max_shift"], 0.0)
+        self.assertTrue(kwargs["allow_missing"])
+        self.assertTrue(kwargs["force"])
+
+    def test_render_defaults_do_not_allow_missing_or_force(self) -> None:
+        with (
+            patch(
+                "app.audio.render.render_episode", return_value=self._result()
+            ) as fake_render,
+            patch("sys.stdout", new_callable=StringIO),
+        ):
+            cli.main(["render", "output/ep"])
+
+        kwargs = fake_render.call_args.kwargs
+        self.assertFalse(kwargs["allow_missing"])
+        self.assertFalse(kwargs["force"])
+
+    def test_render_invalid_original_volume_errors(self) -> None:
+        with patch("sys.stderr", new_callable=StringIO) as fake_stderr:
+            exit_code = cli.main(["render", "output/ep", "--original-volume", "2"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("original_volume", fake_stderr.getvalue())
+
+    def test_render_negative_max_shift_errors(self) -> None:
+        with patch("sys.stderr", new_callable=StringIO) as fake_stderr:
+            exit_code = cli.main(["render", "output/ep", "--max-shift=-1"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("max_shift_seconds", fake_stderr.getvalue())
+
+    def test_render_missing_normalized_errors(self) -> None:
+        # Không patch render_episode: thư mục không tồn tại phải ra RenderError thật.
+        with (
+            TemporaryDirectory() as tmp,
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(["render", str(Path(tmp) / "no_such_episode")])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[render] LỖI", fake_stderr.getvalue())
+        self.assertIn("normalize", fake_stderr.getvalue())
+
+    def test_render_error_exits_one(self) -> None:
+        with (
+            patch(
+                "app.audio.render.render_episode",
+                side_effect=RenderError("2 segment thiếu audio (id 5, 6)"),
+            ),
+            patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+        ):
+            exit_code = cli.main(["render", "output/ep"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[render] LỖI", fake_stderr.getvalue())
+        self.assertIn("5, 6", fake_stderr.getvalue())
 
 
 if __name__ == "__main__":

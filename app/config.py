@@ -6,7 +6,7 @@ chỉ là config, không hard-code trong source) — thiếu thì báo lỗi rõ
 lúc tạo translator.
 
 Chỉ khai báo các section đã có code đọc (``whisper``, ``translation``,
-``tts``).
+``tts``, ``timing``, ``mixing``).
 Key lạ bị từ chối thay vì bỏ qua: gõ nhầm ``batchsize`` mà lặng lẽ dùng
 mặc định thì rất khó phát hiện khi playlist đã chạy vài giờ.
 """
@@ -67,6 +67,17 @@ class TimingConfig:
 
 
 @dataclass(frozen=True)
+class MixingConfig:
+    # Volume audio gốc khi mix (plan §15: 25–35%). 0 = tắt hẳn audio gốc.
+    original_volume: float = 0.30
+    # Volume giọng tiếng Việt. Riêng khỏi ``tts.volume`` (đó là volume do
+    # edge-tts áp lúc tổng hợp, dạng +N%; đây là hệ số lúc mix).
+    speech_volume: float = 1.0
+    # Số giây dời tối đa một câu khi câu trước tràn slot. 0 = không dời (đè).
+    max_shift_seconds: float = 1.0
+
+
+@dataclass(frozen=True)
 class AppConfig:
     workspace: Path = Path("output")
     target_language: str = "vi"
@@ -74,6 +85,7 @@ class AppConfig:
     translation: TranslationConfig = field(default_factory=TranslationConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     timing: TimingConfig = field(default_factory=TimingConfig)
+    mixing: MixingConfig = field(default_factory=MixingConfig)
 
 
 # Kiểu hợp lệ cho từng key. ``None`` trong tuple = cho phép giá trị null.
@@ -109,6 +121,11 @@ _TIMING_TYPES: dict[str, tuple[type | None, ...]] = {
     "normal_max_ratio": (int, float),
     "max_tempo": (int, float),
 }
+_MIXING_TYPES: dict[str, tuple[type | None, ...]] = {
+    "original_volume": (int, float),
+    "speech_volume": (int, float),
+    "max_shift_seconds": (int, float),
+}
 # vd "+0%", "-10%", "+100%". YAML `rate: +0%` không quote vẫn parse ra str,
 # nhưng thiếu dấu % (`rate: 0%` thành số 0 hoặc thiếu dấu +/-) là lỗi hay gặp.
 _RATE_VOLUME_RE = re.compile(r"^[+-]\d{1,3}%$")
@@ -140,6 +157,31 @@ def validate_timing_ratios(normal_max_ratio: float, max_tempo: float) -> None:
         raise ConfigError(
             "`timing.normal_max_ratio`/`timing.max_tempo` không hợp lệ: cần "
             f"1.0 <= normal_max_ratio ({normal_max_ratio}) < max_tempo ({max_tempo}) <= 2.0."
+        )
+
+
+def validate_mixing(
+    original_volume: float, speech_volume: float, max_shift_seconds: float
+) -> None:
+    """Kiểm tra tham số mix: ``0 <= original_volume <= 1``, ``0 < speech_volume <= 2``,
+    ``max_shift_seconds >= 0``.
+
+    Dùng chung cho ``config.yaml`` (``parse_config``) và flag CLI
+    (``--original-volume``/``--max-shift``) để cùng một thông báo lỗi.
+    ``speech_volume`` không cho bằng 0: tắt hẳn giọng thuyết minh thì không
+    còn là bản lồng tiếng, gần như chắc chắn là gõ nhầm.
+    """
+    if not 0.0 <= original_volume <= 1.0:
+        raise ConfigError(
+            f"`mixing.original_volume` phải trong khoảng 0.0–1.0 (đang là {original_volume})."
+        )
+    if not 0.0 < speech_volume <= 2.0:
+        raise ConfigError(
+            f"`mixing.speech_volume` phải lớn hơn 0 và không quá 2.0 (đang là {speech_volume})."
+        )
+    if max_shift_seconds < 0.0:
+        raise ConfigError(
+            f"`mixing.max_shift_seconds` không được âm (đang là {max_shift_seconds})."
         )
 
 
@@ -184,7 +226,7 @@ def parse_config(data: Any) -> AppConfig:
     if not isinstance(data, dict):
         raise ConfigError("File config phải là một mapping ở cấp cao nhất.")
 
-    top_level = {"workspace", "target_language", "whisper", "translation", "tts", "timing"}
+    top_level = {"workspace", "target_language", "whisper", "translation", "tts", "timing", "mixing"}
     unknown = sorted(set(data) - top_level)
     if unknown:
         raise ConfigError(
@@ -235,6 +277,10 @@ def parse_config(data: Any) -> AppConfig:
     timing = TimingConfig(**_check_section(data.get("timing"), "timing", _TIMING_TYPES))
     validate_timing_ratios(timing.normal_max_ratio, timing.max_tempo)
     kwargs["timing"] = timing
+
+    mixing = MixingConfig(**_check_section(data.get("mixing"), "mixing", _MIXING_TYPES))
+    validate_mixing(mixing.original_volume, mixing.speech_volume, mixing.max_shift_seconds)
+    kwargs["mixing"] = mixing
 
     return AppConfig(**kwargs)
 

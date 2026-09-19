@@ -130,6 +130,50 @@ class TestParseConfig(unittest.TestCase):
         with self.assertRaises(ConfigError):
             parse_config({"timing": {"max_tempo": "1.25"}})
 
+    def test_mixing_section_defaults(self) -> None:
+        config = parse_config(None)
+        self.assertEqual(config.mixing.original_volume, 0.30)
+        self.assertEqual(config.mixing.speech_volume, 1.0)
+        self.assertEqual(config.mixing.max_shift_seconds, 1.0)
+
+    def test_mixing_section_reads_values(self) -> None:
+        config = parse_config(
+            {"mixing": {"original_volume": 0.5, "speech_volume": 1.5, "max_shift_seconds": 0}}
+        )
+        self.assertEqual(config.mixing.original_volume, 0.5)
+        self.assertEqual(config.mixing.speech_volume, 1.5)
+        self.assertEqual(config.mixing.max_shift_seconds, 0)
+
+    def test_mixing_accepts_boundary_values(self) -> None:
+        config = parse_config({"mixing": {"original_volume": 0, "speech_volume": 2}})
+        self.assertEqual(config.mixing.original_volume, 0)
+        self.assertEqual(config.mixing.speech_volume, 2)
+        self.assertEqual(parse_config({"mixing": {"original_volume": 1}}).mixing.original_volume, 1)
+
+    def test_mixing_rejects_unknown_key(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "original_volum"):
+            parse_config({"mixing": {"original_volum": 0.3}})
+
+    def test_mixing_rejects_original_volume_out_of_range(self) -> None:
+        for value in (-0.1, 1.1):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                parse_config({"mixing": {"original_volume": value}})
+
+    def test_mixing_rejects_speech_volume_out_of_range(self) -> None:
+        for value in (0, 2.5):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                parse_config({"mixing": {"speech_volume": value}})
+
+    def test_mixing_rejects_negative_max_shift(self) -> None:
+        with self.assertRaises(ConfigError):
+            parse_config({"mixing": {"max_shift_seconds": -0.5}})
+
+    def test_mixing_rejects_wrong_type(self) -> None:
+        for key in ("original_volume", "speech_volume", "max_shift_seconds"):
+            for value in ("0.3", True):
+                with self.subTest(key=key, value=value), self.assertRaises(ConfigError):
+                    parse_config({"mixing": {key: value}})
+
 
 class TestLoadConfig(unittest.TestCase):
     def test_explicit_missing_path_errors(self) -> None:
@@ -159,6 +203,9 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(config.tts.voice, "vi-VN-HoaiMyNeural")
         self.assertEqual(config.timing.normal_max_ratio, 1.05)
         self.assertEqual(config.timing.max_tempo, 1.25)
+        self.assertEqual(config.mixing.original_volume, 0.30)
+        self.assertEqual(config.mixing.speech_volume, 1.0)
+        self.assertEqual(config.mixing.max_shift_seconds, 1.0)
 
 
 if __name__ == "__main__":

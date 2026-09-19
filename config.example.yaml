@@ -35,3 +35,8 @@ tts:
 timing:
   normal_max_ratio: 1.05  # tts_duration/slot <= giá trị này: giữ nguyên tốc độ
   max_tempo: 1.25          # co giãn (ffmpeg atempo) tối đa; vượt quá -> too_long
+
+mixing:
+  original_volume: 0.30    # volume audio gốc khi mix (0.0–1.0); 0 = tắt hẳn audio gốc
+  speech_volume: 1.00      # volume giọng tiếng Việt (> 0, <= 2.0)
+  max_shift_seconds: 1.0   # dời tối đa một câu khi câu trước tràn slot; 0 = không dời (đè)

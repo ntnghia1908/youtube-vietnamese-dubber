@@ -5,7 +5,8 @@ Checkpoint 2: subcommand ``transcribe`` (trích audio + speech-to-text).
 Checkpoint 3: subcommand ``translate`` (dịch transcript) + ``--config``.
 Checkpoint 4: subcommand ``tts`` (tổng hợp giọng nói bằng edge-tts).
 Checkpoint 5: subcommand ``normalize`` (chuẩn hoá timing tts vs slot gốc).
-Các subcommand khác (render, dub, playlist, ...) sẽ được thêm dần ở
+Checkpoint 6: subcommand ``render`` (dựng voice_track.wav + mix ra output_vi.mp4).
+Các subcommand khác (dub, playlist, ...) sẽ được thêm dần ở
 các checkpoint tiếp theo, xem docs/IMPLEMENTATION_PLAN.md.
 
 Flag CLI để mặc định ``None`` để phân biệt "không truyền" với "truyền
@@ -25,6 +26,7 @@ from app.config import (
     AppConfig,
     ConfigError,
     load_config,
+    validate_mixing,
     validate_rate_or_volume,
     validate_timing_ratios,
 )
@@ -195,6 +197,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Tính lại toàn bộ (probe + co giãn) dù normalized.json đã khớp.",
+    )
+
+    render_parser = subparsers.add_parser(
+        "render",
+        parents=[common],
+        help="Ghép voice_track.wav, mix với audio gốc, xuất output_vi.mp4.",
+    )
+    render_parser.add_argument(
+        "episode_dir",
+        help="Thư mục episode đã có normalized.json + source.mp4 (tạo bởi `normalize`, `download`).",
+    )
+    render_parser.add_argument(
+        "--original-volume",
+        type=float,
+        default=None,
+        help="Volume audio gốc, 0.0–1.0. Mặc định: `mixing.original_volume` trong config, hoặc 0.30.",
+    )
+    render_parser.add_argument(
+        "--max-shift",
+        type=float,
+        default=None,
+        help=(
+            "Số giây dời tối đa một câu khi câu trước tràn slot (0 = không dời, đè). "
+            "Mặc định: `mixing.max_shift_seconds` trong config, hoặc 1.0."
+        ),
+    )
+    render_parser.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="Cho phép segment thiếu audio (status missing): chèn im lặng thay vì báo lỗi.",
+    )
+    render_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Dựng lại voice_track.wav và mux lại output_vi.mp4 dù đã khớp.",
     )
 
     return parser
@@ -427,12 +464,68 @@ def _cmd_normalize(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
+def _cmd_render(args: argparse.Namespace, config: AppConfig) -> int:
+    # Import cục bộ: subcommand chưa dùng tới không cần ffmpeg có sẵn.
+    from app.audio.render import RenderError, render_episode
+
+    original_volume = (
+        args.original_volume if args.original_volume is not None else config.mixing.original_volume
+    )
+    max_shift = args.max_shift if args.max_shift is not None else config.mixing.max_shift_seconds
+    # Không có flag cho speech_volume: chỉnh ở `mixing.speech_volume` (config).
+    speech_volume = config.mixing.speech_volume
+    try:
+        validate_mixing(original_volume, speech_volume, max_shift)
+    except ConfigError as exc:
+        print(f"[render] LỖI: {exc}", file=sys.stderr)
+        return 1
+
+    episode_dir = Path(args.episode_dir)
+    try:
+        result = render_episode(
+            episode_dir,
+            original_volume=original_volume,
+            speech_volume=speech_volume,
+            max_shift=max_shift,
+            allow_missing=args.allow_missing,
+            force=args.force,
+            log=lambda message: print(message, flush=True),
+        )
+    except RenderError as exc:
+        print(f"[render] LỖI: {exc}", file=sys.stderr)
+        return 1
+
+    def _ids_suffix(ids: list[int]) -> str:
+        return f" (id {', '.join(str(i) for i in ids)})" if ids else ""
+
+    total = len(result.placed_ids) + len(result.silent_ids) + len(result.missing_ids)
+    print(f"[render] segments     : {total}")
+    print(f"[render] placed       : {len(result.placed_ids)}")
+    print(f"[render] silent       : {len(result.silent_ids)}")
+    print(f"[render] missing      : {len(result.missing_ids)}")
+    shifted_suffix = f" (tối đa {result.max_shift_seen:.2f}s)" if result.shifted_ids else ""
+    print(f"[render] shifted      : {len(result.shifted_ids)}{shifted_suffix}")
+    print(f"[render] overlap      : {len(result.overlap_ids)}{_ids_suffix(result.overlap_ids)}")
+    print(f"[render] voice_track  : {result.voice_track_path}")
+    print(f"[render] output       : {result.output_path}")
+    if result.missing_ids:
+        # Chỉ tới được đây khi --allow-missing: vẫn phải nói rõ bản thuyết
+        # minh đang thiếu câu, không được lặng lẽ lọt ra sản phẩm cuối.
+        ids = ", ".join(str(i) for i in result.missing_ids)
+        print(
+            f"[render] CẢNH BÁO: {len(result.missing_ids)} segment thiếu audio "
+            f"(id {ids}) được thay bằng im lặng."
+        )
+    return 0
+
+
 _COMMANDS = {
     "download": _cmd_download,
     "transcribe": _cmd_transcribe,
     "translate": _cmd_translate,
     "tts": _cmd_tts,
     "normalize": _cmd_normalize,
+    "render": _cmd_render,
 }
 
 
