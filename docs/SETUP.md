@@ -82,6 +82,35 @@ khoảng 37% layer: đo thực tế 263 s cho video 244 s (~64,7 s / phút video
 ~11,3 giờ cho playlist 630 phút), so với 382 s khi chạy CPU thuần. Card
 VRAM lớn hơn sẽ nhanh hơn nhiều.
 
+**Bật flash attention + nén KV cache (khuyến nghị, nhanh hơn ~17%)** — KV
+cache nhỏ đi một nửa nên thêm vài layer lên GPU, không phải sửa code:
+
+```powershell
+[Environment]::SetEnvironmentVariable("OLLAMA_FLASH_ATTENTION","1","User")
+[Environment]::SetEnvironmentVariable("OLLAMA_KV_CACHE_TYPE","q8_0","User")
+# Thoat Ollama o khay he thong (Quit), roi mo lai tu Start menu.
+```
+
+Bẫy: mở lại Ollama từ một shell đã mở **trước** khi đặt biến thì app kế thừa
+môi trường cũ và âm thầm bỏ qua cài đặt. Kiểm tra bằng log server, không
+tin `ollama ps`:
+
+```powershell
+Select-String "$env:LOCALAPPDATA\Ollama\server.log" -Pattern "OLLAMA_FLASH_ATTENTION:\S+" | Select-Object -Last 1
+# phai la OLLAMA_FLASH_ATTENTION:true; dong "llama_kv_cache: size" phai ghi K (q8_0)
+```
+
+Số đo (RTX 3050 6 GB, `gemma3:12b`, 100 câu thật = 4 batch × 25, 2026-09-19):
+
+| Cấu hình | Thời gian | Token/s sinh | CPU/GPU |
+|---|---|---|---|
+| Mặc định | 424 s | 4,9 | 63/37 |
+| Flash attention + KV `q8_0` | 353 s | 6,0 | 61/39 |
+| Như trên + `OLLAMA_NUM_PARALLEL=2`, 2 request song song | 265 s | 4,1 mỗi request (7,7 tổng) | 64/36 |
+
+Dòng cuối chỉ có lợi khi code gửi 2 request cùng lúc (dịch 2 tập song
+song) — pipeline hiện tại dịch tuần tự, **đừng** đặt `OLLAMA_NUM_PARALLEL`.
+
 ### A5. Kết nối mạng cho TTS — cần cho Checkpoint 4 trở đi
 
 Subcommand `tts` gọi dịch vụ giọng đọc của Microsoft Edge qua WebSocket

@@ -108,28 +108,29 @@ Bốn cái bẫy đã mất thời gian vì nó:
 
 ## Việc tiếp theo
 
-**Checkpoint 7 — End-to-end command**: `python -m app dub VIDEO_URL` tự
-chạy download → transcribe → translate → tts → normalize → render, gọi
-thẳng các hàm stage (`translate_transcript`, `synthesize_translation`,
-`normalize_timing`, `render_episode`), không đi qua CLI con. Đọc trước mục
-A của `docs/decisions/checkpoint-5.md` (A2, A3) và
-`docs/decisions/checkpoint-6.md`: `render_episode` ném `RenderError` (không
-phải `TimingError`) và **không** tự chạy stage trước — `dub` phải điều
-phối: sau `normalize` nếu `missing_ids` khác rỗng thì chạy lại `tts` rồi
-`normalize` (giới hạn số vòng, đừng lặp vô hạn) trước khi `render`. Tham
-số mix lấy từ `config.mixing`, validate bằng `validate_mixing`. Video
-không phải tiếng Anh: `dub` phải nhận `--source-lang` (bẫy auto-detect ở
-mục Lệnh hay dùng).
+Đã xong tới **CP8** (`dub` end-to-end, `playlist` với luồng tải song song
++ resume qua `playlist.json`). Playlist thật đang dùng:
+`PLJVKAfvqjvcp9lhYU37emhlRZExZrx0Cm` (22 tập, EP13–21 Private, tập dài
+18–36 phút, ~35 phút xử lý/tập). EP1 đã `completed`, EP2 đã có transcript.
 
-Từ CP6.5 (đọc mục A của `docs/decisions/checkpoint-6.5.md`): `dub` phải
-gọi `load_effective_glossary(episode_dir, shared)` rồi truyền
-`glossary=` vào `translate_transcript`, bắt `GlossaryError` chung với
-`TranslationError`. `dub` **không** tự chạy `glossary` (nháp do model tạo
-mà người dùng chưa duyệt sẽ bị dịch luôn) — thiếu `<ep>/glossary.yaml` thì
-chỉ in một dòng nhắc chạy `python -m app glossary "<ep>"`. Glossary đổi thì
-`translate` tự dịch lại, `tts` chỉ làm lại câu có text đổi. Model dịch đã
-chốt `gemma3:12b` (`timeout_seconds: 900`): `qwen3:8b` trượt xưng hô ba–con.
+**Checkpoint 9 — Quality improvements** (plan §CP9: chọn **một** hạng mục
+mỗi lần, chỉ sau khi đánh giá output thật). Việc đầu tiên: **nghe
+`output_vi.mp4` của EP1** — chưa ai nghe bằng tai output nào từ CP6.
+Ứng viên, theo số liệu đã đo:
 
-Còn nợ từ CP6: chưa nghe bằng tai `output_vi.mp4` — nghe quanh 0:33–0:36
-(id 8, tempo 1.25) để quyết có hạ `timing.max_tempo` không, và thử
-`--original-volume` (mặc định 0.30). Không chặn CP7.
+1. **Câu dịch quá dài**: EP1 có 79/353 câu `too_long` (22%) — vượt
+   `timing.max_tempo` 1.25. Hướng: prompt rút gọn câu / dịch lại riêng câu
+   too_long với giới hạn ký tự (plan mục 5 "translation shortening").
+2. **Nhiều giọng**: một giọng HoaiMy đọc cả vai ba lẫn con (plan mục 6–8).
+3. **Dịch 2 tập song song** (không phải chất lượng, là tốc độ): đo được
+   nhanh hơn 1.33× ở bước dịch với `OLLAMA_NUM_PARALLEL=2` — số đo ở
+   `docs/SETUP.md` mục A4.
+
+Nợ riêng, làm bằng `fix(...)`, không phải checkpoint:
+- `fix(tts)`: subagent CP8 từng thấy edge-tts lỗi vĩnh viễn ~20–25% câu trên
+  tập 353 câu (lần chạy lại thì 0%) — nghi rate-limit; cần backoff/hạ
+  `tts.concurrency`. Xem `docs/decisions/checkpoint-8.md` F1.
+- Mục `[CẦN DUYỆT]` còn mở của CP7: C0 (Whisper chia segment khác giữa hai
+  lần chạy), C1 (`tts/manifest.json` bị ghi lại dù không đổi).
+- Summary `playlist` chỉ in dòng đầu của lỗi → không thấy lý do thật
+  (vd "Private video").
