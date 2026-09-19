@@ -29,8 +29,11 @@ python --version      # ky vong: Python 3.11.x tro len
 
 ### A2. ffmpeg (bắt buộc)
 
-Cần cho cả `yt-dlp` (ghép audio+video khi tải) lẫn subcommand
-`transcribe` (trích audio).
+Cần cho cả `yt-dlp` (ghép audio+video khi tải), subcommand `transcribe`
+(trích audio), `normalize` (đo độ dài + co giãn) và `render` (mix + mux).
+`render` dùng filter `amix` với option `normalize=0` và encoder `aac`: đã
+kiểm chứng với ffmpeg 7.1.1 (bản gyan.dev "essentials"); bản quá cũ có
+thể báo thiếu option `normalize`.
 
 - **Windows**: tải bản build tại <https://www.gyan.dev/ffmpeg/builds/>,
   giải nén ra ví dụ `C:\ffmpeg`, rồi thêm `C:\ffmpeg\bin` vào **PATH hệ
@@ -268,3 +271,8 @@ Môi trường được coi là sẵn sàng khi **tất cả** dòng dưới đ�
 - [ ] (CP5 trở đi) `python -m app normalize <episode_dir>` tạo được
       `normalized.json`; report `too_long` không bất thường so với số
       segment
+- [ ] (CP6 trở đi) `python -m app render <episode_dir>` tạo được
+      `voice_track.wav` + `output_vi.mp4`; `ffprobe output_vi.mp4` thấy
+      đúng 1 stream video và 1 stream `aac`, độ dài ≈ `source.mp4`; chạy
+      lần 2 in `SKIP` cho cả hai. Mở `output_vi.mp4` nghe thử, không chỉ
+      nhìn exit code

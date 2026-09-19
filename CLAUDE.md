@@ -104,11 +104,19 @@ Ba cái bẫy đã mất thời gian vì nó:
 
 ## Việc tiếp theo
 
-**Checkpoint 6 — Build voice track + render**: đặt audio từng segment vào
-đúng timestamp thành `voice_track.wav`, mix với audio gốc, giữ video
-stream, xuất `output_vi.mp4`. Đọc trước mục A của
-`docs/decisions/checkpoint-5.md`: chỉ ghép segment có `audio != null` từ
-`normalized.json` (dùng `audio`, không dùng `tts_file`); chốt cách xử lý
-`missing` (chèn im lặng hay báo lỗi) và `too_long` còn `overflow > 0`
-(đè sang câu sau hay dời). Nghe thử `timing/000008.wav` (tempo 1.25) để
-quyết có hạ `max_tempo` không.
+**Checkpoint 7 — End-to-end command**: `python -m app dub VIDEO_URL` tự
+chạy download → transcribe → translate → tts → normalize → render, gọi
+thẳng các hàm stage (`translate_transcript`, `synthesize_translation`,
+`normalize_timing`, `render_episode`), không đi qua CLI con. Đọc trước mục
+A của `docs/decisions/checkpoint-5.md` (A2, A3) và
+`docs/decisions/checkpoint-6.md`: `render_episode` ném `RenderError` (không
+phải `TimingError`) và **không** tự chạy stage trước — `dub` phải điều
+phối: sau `normalize` nếu `missing_ids` khác rỗng thì chạy lại `tts` rồi
+`normalize` (giới hạn số vòng, đừng lặp vô hạn) trước khi `render`. Tham
+số mix lấy từ `config.mixing`, validate bằng `validate_mixing`. Video
+không phải tiếng Anh: `dub` phải nhận `--source-lang` (bẫy auto-detect ở
+mục Lệnh hay dùng).
+
+Còn nợ từ CP6: chưa nghe bằng tai `output_vi.mp4` — nghe quanh 0:33–0:36
+(id 8, tempo 1.25) để quyết có hạ `timing.max_tempo` không, và thử
+`--original-volume` (mặc định 0.30). Không chặn CP7.

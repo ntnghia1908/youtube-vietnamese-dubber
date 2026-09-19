@@ -12,7 +12,7 @@ Kiến trúc pipeline đầy đủ, nguyên tắc thiết kế và lộ trình t
 checkpoint được mô tả chi tiết tại
 [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
-## Trạng thái hiện tại — Checkpoint 5: Timing normalization
+## Trạng thái hiện tại — Checkpoint 6: Build voice track + render
 
 Đã có:
 
@@ -33,16 +33,23 @@ checkpoint được mô tả chi tiết tại
   với slot gốc (`end - start`), co giãn nhẹ bằng `ffmpeg atempo` khi hợp
   lý, đánh dấu câu quá dài; tạo `normalized.json` + `timing/*.wav`
   (Checkpoint 5).
+- Subcommand `render`: đặt audio từng segment vào đúng timestamp thành
+  `voice_track.wav`, mix với audio gốc (hạ volume), giữ nguyên video
+  stream, xuất `output_vi.mp4` (Checkpoint 6).
 
-Chưa có: build voice track hoàn chỉnh + render video (Checkpoint 6),
-pipeline end-to-end (Checkpoint 7), playlist (Checkpoint 8).
+Chưa có: pipeline end-to-end một lệnh từ URL (Checkpoint 7), playlist
+(Checkpoint 8). Chất lượng giọng/độ to audio gốc trong `output_vi.mp4`
+mới được kiểm bằng số liệu, chưa nghe bằng tai người.
 
 ## Yêu cầu
 
 - Python 3.11 trở lên.
 - `ffmpeg` (kèm `ffprobe`) cài sẵn trên máy và có trong `PATH` — cần cho
   `yt-dlp` (merge audio+video khi tải), cho subcommand `transcribe`
-  (trích audio) và cho subcommand `normalize` (đo độ dài + co giãn audio).
+  (trích audio), cho subcommand `normalize` (đo độ dài + co giãn audio)
+  và cho subcommand `render` (giải mã segment, mix, mux). Đã kiểm chứng
+  với ffmpeg 7.1.1; bản quá cũ có thể thiếu option `normalize` của filter
+  `amix`.
 - [Ollama](https://ollama.com/download) đang chạy, đã `ollama pull` model
   dịch (vd `qwen3:8b`) — cần cho subcommand `translate`.
 - Kết nối mạng khi chạy subcommand `tts` — `edge-tts` gọi dịch vụ giọng
@@ -58,8 +65,8 @@ pip install -e .
 
 Dependency hiện tại: `yt-dlp` (subcommand `download`), `faster-whisper`
 (subcommand `transcribe`), `pyyaml` (đọc config), `edge-tts` (subcommand
-`tts`). Subcommand `normalize` chỉ cần `ffmpeg`/`ffprobe`, không thêm
-dependency Python.
+`tts`). Subcommand `normalize` và `render` chỉ cần `ffmpeg`/`ffprobe`,
+không thêm dependency Python (dựng voice track bằng stdlib `wave`/`array`).
 
 ## Cấu hình
 
@@ -108,6 +115,12 @@ python -m app normalize "output/VIDEO_ID__title"
 
 # Nâng mức co giãn tối đa (mặc định 1.25 -> tempo tối đa 1.25x)
 python -m app normalize "output/VIDEO_ID__title" --max-tempo 1.4
+
+# Ghép voice_track.wav + mix với audio gốc, xuất output_vi.mp4
+python -m app render "output/VIDEO_ID__title"
+
+# Hạ/tăng audio gốc (0.0–1.0; mặc định 0.30) — chỉ mux lại, không dựng lại voice track
+python -m app render "output/VIDEO_ID__title" --original-volume 0.2
 ```
 
 `translate` dịch theo batch (mặc định 25 segment), validate đủ/không
@@ -134,11 +147,23 @@ atempo` (`timing/000007.wav`); câu vẫn dài hơn `max_tempo` (mặc định
 `normalized.json`. Việc rút gọn câu quá dài bằng AI rồi tổng hợp lại chưa
 làm ở checkpoint này.
 
-Chạy lại lệnh `download`/`transcribe`/`translate`/`tts`/`normalize` sẽ
-**không làm lại** các bước đã có output (`source.mp4`, `audio.wav`,
+`render` giải mã từng segment (`audio` trong `normalized.json`) rồi đặt
+vào `voice_track.wav` (mono 24 kHz) tại `start` của segment, sau đó một
+lệnh ffmpeg mix với audio gốc và mux ra `output_vi.mp4` (video `-c:v copy`,
+không encode lại; audio aac stereo). Câu `too_long` còn tràn slot thì
+**dời** câu sau tối đa `mixing.max_shift_seconds` (mặc định 1.0s) thay vì
+đè hai giọng vào nhau; chạm trần mới đè (`--max-shift 0` = luôn đè). Segment
+thiếu audio (`missing`) làm `render` báo lỗi và dừng — chạy lại `tts` rồi
+`normalize`, hoặc dùng `--allow-missing` để chèn im lặng. Kết quả vị trí
+từng câu (`placed_at`, `shift`, `overlap`) nằm trong `render.json`. Volume
+audio gốc/giọng Việt chỉnh ở section `mixing` của `config.yaml`.
+
+Chạy lại lệnh `download`/`transcribe`/`translate`/`tts`/`normalize`/`render`
+sẽ **không làm lại** các bước đã có output (`source.mp4`, `audio.wav`,
 `transcript.json`, `translated.json`, `tts/manifest.json`,
-`normalized.json`) trừ khi dùng `--force` (hỗ trợ resume) — quan trọng
-với playlist nhiều tập chạy hàng giờ.
+`normalized.json`, `voice_track.wav` + `output_vi.mp4` khớp `render.json`)
+trừ khi dùng `--force` (hỗ trợ resume) — quan trọng với playlist nhiều tập
+chạy hàng giờ.
 
 ## Chạy test
 
@@ -152,12 +177,13 @@ python -m unittest discover -s tests
 youtube-vietnamese-dubber/
 ├── app/                  # Source code chính (package "app")
 │   ├── __main__.py       # Cho phép chạy `python -m app`
-│   ├── cli.py            # CLI (argparse); subcommand download, transcribe, translate, tts, normalize
+│   ├── cli.py            # CLI (argparse); subcommand download, transcribe, translate, tts, normalize, render
 │   ├── config.py         # load_config(): config.yaml -> AppConfig
 │   ├── youtube/          # Stage: metadata & download video (yt-dlp)
 │   │   └── download.py   # download_video(): metadata.json + source.mp4, có resume
 │   ├── audio/            # Stage: xử lý audio/video (FFmpeg)
-│   │   └── ffmpeg.py     # extract_audio(): source.mp4 -> audio.wav, có resume
+│   │   ├── ffmpeg.py     # extract_audio(): source.mp4 -> audio.wav, có resume
+│   │   └── render.py     # render_episode(): normalized.json + source.mp4 -> voice_track.wav + output_vi.mp4, có resume
 │   ├── transcription/    # Stage: speech-to-text (faster-whisper)
 │   │   └── whisper.py    # transcribe_audio(): audio.wav -> transcript.json, có resume
 │   ├── translation/      # Stage: dịch thuật
