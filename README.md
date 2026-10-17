@@ -118,6 +118,10 @@ python -m app glossary "output/VIDEO_ID__title"
 # Thêm glossary dùng chung cho cả series (gộp với <episode>/glossary.yaml)
 python -m app translate "output/VIDEO_ID__title" --glossary ./series-glossary.yaml
 
+# Tập thuộc playlist còn tự gộp <thư mục playlist>/glossary.yaml (nằm cạnh
+# playlist.json; sửa trên Web UI ở /pl/<key>/glossary). Thứ tự, sau thắng
+# trước: --glossary -> glossary playlist -> glossary của tập.
+
 # Tổng hợp giọng tiếng Việt (edge-tts) cho từng segment đã dịch
 python -m app tts "output/VIDEO_ID__title"
 

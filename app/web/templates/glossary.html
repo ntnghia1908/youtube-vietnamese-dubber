@@ -1,20 +1,33 @@
 {% extends "base.html" %}
-{% block title %}Glossary — {{ ep.title or ep.rel_dir }}{% endblock %}
+{% block title %}Glossary — {% if ep %}{{ ep.title or ep.rel_dir }}{% else %}{{ pl.title or pl.key }}{% endif %}{% endblock %}
 {% block content %}
+{% if ep %}{% set api_base = "/api/episodes/" ~ (ep.key | urlencode) %}{% else %}{% set api_base = "/api/playlists/" ~ (pl.key | urlencode) %}{% endif %}
+{% if ep %}
 <h1>Glossary: <a href="/ep/{{ ep.key | urlencode }}">{{ ep.title or ep.rel_dir }}</a></h1>
-
 <p id="stale-label" class="warn">
   {% if gstate.stale is none %}Chưa có bản dịch (hoặc glossary đang lỗi).
   {% elif gstate.stale %}Bản dịch CŨ — cần dịch lại.
   {% else %}Bản dịch khớp glossary.{% endif %}
 </p>
+{% else %}
+<h1>Glossary playlist: <a href="/pl/{{ pl.key | urlencode }}">{{ pl.title or pl.key }}</a></h1>
+<p>Áp dụng cho mọi tập của playlist (gộp với glossary riêng từng tập; glossary tập thắng).</p>
+<p id="stale-label" class="warn">
+  {% if gstate.stale_items %}{{ gstate.stale_items | length }}/{{ gstate.translated_items | length }} tập đã dịch bằng glossary cũ (tập {{ gstate.stale_items | join(", ") }}).
+  {% else %}Không có tập nào cần dịch lại.{% endif %}
+</p>
+{% endif %}
 {% if gstate.shared_path %}
   <p>Glossary dùng chung (chỉ đọc, gộp với glossary của tập): <code>{{ gstate.shared_path }}</code></p>
 {% endif %}
+{% if ep and ep.playlist_key and gstate.playlist_path %}
+  <p>Glossary playlist (gộp, sửa ở đây): <a href="/pl/{{ ep.playlist_key | urlencode }}/glossary"><code>{{ gstate.playlist_path }}</code></a></p>
+{% endif %}
 <p id="state-error" class="error">{{ gstate.error or "" }}</p>
 
-<form id="glossary-form" data-key="{{ ep.key }}" data-sha="{{ gstate.file_sha256 or '' }}"
-      data-has-transcript="{{ '1' if gstate.has_transcript else '' }}">
+<form id="glossary-form" data-api="{{ api_base }}" data-mode="{{ 'episode' if ep else 'playlist' }}"
+      data-sha="{{ gstate.file_sha256 or '' }}"
+      data-has-transcript="{{ '1' if ep and gstate.has_transcript else '' }}">
   <textarea id="glossary-text" rows="28" cols="100" spellcheck="false"
             placeholder="# Cấu trúc (mọi key đều tuỳ chọn):
 context: mô tả bối cảnh
@@ -31,8 +44,12 @@ skip:
   - cụm không dịch">{{ gstate.content }}</textarea>
   <p>
     <button type="submit" id="save">Lưu</button>
-    {% if not gstate.exists and gstate.has_transcript %}<button type="button" id="draft">Tạo nháp bằng model</button>{% endif %}
-    {% if gstate.has_transcript %}<button type="button" id="redub">Dịch lại &amp; chạy tiếp</button>{% endif %}
+    {% if ep %}
+      {% if not gstate.exists and gstate.has_transcript %}<button type="button" id="draft">Tạo nháp bằng model</button>{% endif %}
+      {% if gstate.has_transcript %}<button type="button" id="redub">Dịch lại &amp; chạy tiếp</button>{% endif %}
+    {% else %}
+      <button type="button" id="redub">Dịch lại các tập cũ</button>
+    {% endif %}
   </p>
   <p id="msg" class="error"></p>
 </form>

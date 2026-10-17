@@ -20,7 +20,9 @@ from app.translation.glossary import (
     GLOSSARY_FILENAME,
     GlossaryError,
     load_effective_glossary,
+    load_glossary,
     parse_glossary,
+    playlist_glossary_path,
 )
 from app.translation.glossary_draft import BACKUP_SUFFIX
 from app.translation.translate import TRANSLATED_FILENAME
@@ -52,6 +54,9 @@ class GlossaryState:
     stale: bool | None
     has_transcript: bool
     error: str | None
+    # Glossary playlist (gộp vào giữa dùng chung và tập) nếu tập thuộc playlist;
+    # có thể chưa tồn tại — web dùng để link tới trang tạo/sửa.
+    playlist_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -74,6 +79,7 @@ def read_glossary_state(episode_dir: Path, shared_path: Path | None) -> Glossary
         # File sửa tay ngoài web có thể không phải UTF-8: vẫn mở được trang để sửa.
         content = raw.decode("utf-8", errors="replace")
 
+    playlist_path = playlist_glossary_path(episode_dir)
     effective_sha: str | None = None
     try:
         glossary, _paths = load_effective_glossary(episode_dir, shared_path)
@@ -106,6 +112,7 @@ def read_glossary_state(episode_dir: Path, shared_path: Path | None) -> Glossary
         stale=stale,
         has_transcript=(episode_dir / TRANSCRIPT_FILENAME).is_file(),
         error=error,
+        playlist_path=str(playlist_path) if playlist_path is not None else None,
     )
 
 
@@ -126,16 +133,12 @@ def validate_glossary_text(text: str, *, source: str = GLOSSARY_FILENAME) -> Non
     parse_glossary(data, source=source)  # None (rỗng/chỉ comment) -> Glossary() rỗng
 
 
-def save_glossary_text(
-    episode_dir: Path,
-    text: str,
-    *,
-    base_sha256: str | None,
-    shared_path: Path | None,
-) -> GlossaryState:
-    episode_dir = Path(episode_dir)
+def _write_checked(path: Path, text: str, base_sha256: str | None) -> None:
+    """Validate rồi ghi ``path`` có kiểm hash (optimistic concurrency) + ``.bak``.
+
+    Dùng chung cho glossary tập và glossary playlist.
+    """
     validate_glossary_text(text)
-    path = episode_dir / GLOSSARY_FILENAME
     # Chuẩn hoá xuống dòng cuối; giữ nguyên mọi thứ khác (kể cả comment).
     body = text.replace("\r\n", "\n")
     if body and not body.endswith("\n"):
@@ -152,6 +155,17 @@ def save_glossary_text(
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_bytes(body.encode("utf-8"))
         os.replace(tmp, path)
+
+
+def save_glossary_text(
+    episode_dir: Path,
+    text: str,
+    *,
+    base_sha256: str | None,
+    shared_path: Path | None,
+) -> GlossaryState:
+    episode_dir = Path(episode_dir)
+    _write_checked(episode_dir / GLOSSARY_FILENAME, text, base_sha256)
     return read_glossary_state(episode_dir, shared_path)
 
 
@@ -189,3 +203,112 @@ def redub_request(workspace: Path, episode_dir: Path) -> JobRequest:
     if not isinstance(url, str) or not url:
         raise JobValidationError("metadata.json thiếu `original_url`, không dịch lại được.")
     return JobRequest(kind="dub", url=url)
+
+
+# ---------------------------------------------------------------- playlist (CP9-A)
+
+
+@dataclass(frozen=True)
+class PlaylistGlossaryState:
+    exists: bool
+    content: str
+    file_sha256: str | None
+    shared_path: str | None
+    error: str | None
+    stale_items: list[int]  # index tập đã dịch mà glossary_sha256 != glossary hiệu lực hiện tại
+    translated_items: list[int]  # index tập đã có translated.json
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _playlist_episode_dirs(playlist_dir: Path) -> list[tuple[int, Path]]:
+    """``(index, thư mục tập)`` theo playlist.json, tăng dần theo index.
+
+    Chỉ lấy tên thư mục cuối của ``episode_dir`` để path trong file không
+    thoát được khỏi thư mục playlist.
+    """
+    data = _read_json_dict(playlist_dir / PLAYLIST_FILENAME) or {}
+    entries = data.get("entries")
+    result: list[tuple[int, Path]] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        rel, index = entry.get("episode_dir"), entry.get("index")
+        if isinstance(rel, str) and rel and isinstance(index, int):
+            result.append((index, playlist_dir / Path(rel).name))
+    return sorted(result)
+
+
+def read_playlist_glossary_state(
+    playlist_dir: Path, shared_path: Path | None
+) -> PlaylistGlossaryState:
+    playlist_dir = Path(playlist_dir)
+    path = playlist_dir / GLOSSARY_FILENAME
+    exists = path.is_file()
+    content = ""
+    file_sha: str | None = None
+    error: str | None = None
+    if exists:
+        raw = path.read_bytes()
+        file_sha = _sha256_bytes(raw)
+        content = raw.decode("utf-8", errors="replace")
+        try:
+            load_glossary(path)
+        except GlossaryError as exc:
+            error = str(exc)
+    if error is None and shared_path is not None:
+        try:
+            load_glossary(Path(shared_path))
+        except GlossaryError as exc:
+            error = str(exc)
+
+    stale_items: list[int] = []
+    translated_items: list[int] = []
+    for index, ep_dir in _playlist_episode_dirs(playlist_dir):
+        state = read_glossary_state(ep_dir, shared_path)
+        if not state.has_translation:
+            continue
+        translated_items.append(index)
+        if state.stale:  # None (glossary lỗi) không tính stale
+            stale_items.append(index)
+
+    return PlaylistGlossaryState(
+        exists=exists,
+        content=content,
+        file_sha256=file_sha,
+        shared_path=str(shared_path) if shared_path is not None else None,
+        error=error,
+        stale_items=stale_items,
+        translated_items=translated_items,
+    )
+
+
+def save_playlist_glossary_text(
+    playlist_dir: Path,
+    text: str,
+    *,
+    base_sha256: str | None,
+    shared_path: Path | None,
+) -> PlaylistGlossaryState:
+    playlist_dir = Path(playlist_dir)
+    _write_checked(playlist_dir / GLOSSARY_FILENAME, text, base_sha256)
+    return read_playlist_glossary_state(playlist_dir, shared_path)
+
+
+def playlist_redub_request(playlist_dir: Path, shared_path: Path | None) -> JobRequest:
+    """Job ``playlist --items <các tập stale> --recheck`` để dịch lại tập cũ."""
+    playlist_dir = Path(playlist_dir)
+    state = read_playlist_glossary_state(playlist_dir, shared_path)
+    if not state.stale_items:
+        raise JobValidationError("Không có tập nào cần dịch lại.")
+    data = _read_json_dict(playlist_dir / PLAYLIST_FILENAME) or {}
+    url = data.get("url")
+    if not isinstance(url, str) or not url:
+        raise JobValidationError("playlist.json thiếu `url`, không dịch lại được.")
+    return JobRequest(
+        kind="playlist",
+        url=url,
+        items=",".join(str(i) for i in sorted(state.stale_items)),
+        recheck=True,
+    )

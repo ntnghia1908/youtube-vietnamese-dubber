@@ -4,7 +4,8 @@
   const text = document.getElementById("glossary-text");
   const msg = document.getElementById("msg");
   const label = document.getElementById("stale-label");
-  const key = encodeURIComponent(form.dataset.key);
+  const api = form.dataset.api;
+  const isPlaylist = form.dataset.mode === "playlist";
   let baseSha = form.dataset.sha || null;
   let saved = text.value;
 
@@ -15,6 +16,13 @@
   });
 
   function showState(st) {
+    if (isPlaylist) {
+      label.textContent = st.stale_items.length
+        ? st.stale_items.length + "/" + st.translated_items.length + " tập đã dịch bằng glossary cũ (tập " + st.stale_items.join(", ") + ")."
+        : "Không có tập nào cần dịch lại.";
+      document.getElementById("state-error").textContent = st.error || "";
+      return;
+    }
     label.textContent = st.stale === null
       ? "Chưa có bản dịch (hoặc glossary đang lỗi)."
       : st.stale ? "Bản dịch CŨ — cần dịch lại." : "Bản dịch khớp glossary.";
@@ -31,7 +39,7 @@
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     show("");
-    const r = await fetch("/api/episodes/" + key + "/glossary", {
+    const r = await fetch(api + "/glossary", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: text.value, base_sha256: baseSha }),
@@ -51,10 +59,10 @@
   });
 
   const draft = document.getElementById("draft");
-  if (draft) draft.addEventListener("click", () => post("/api/episodes/" + key + "/glossary/draft"));
+  if (draft) draft.addEventListener("click", () => post(api + "/glossary/draft"));
   const redub = document.getElementById("redub");
   if (redub) redub.addEventListener("click", () => {
     if (dirty() && !confirm("Có thay đổi chưa lưu — vẫn dịch lại với glossary đã lưu?")) return;
-    post("/api/episodes/" + key + "/redub");
+    post(api + "/redub");
   });
 })();

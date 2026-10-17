@@ -18,6 +18,7 @@ from app.translation.glossary import (
     load_glossary,
     merge_glossaries,
     parse_glossary,
+    playlist_glossary_path,
     write_glossary,
 )
 
@@ -384,6 +385,64 @@ class TestLoadEffectiveGlossary(unittest.TestCase):
     def test_load_glossary_missing_file(self) -> None:
         with self.assertRaises(GlossaryError):
             load_glossary(self.root / "nope.yaml")
+
+
+class TestPlaylistLayer(unittest.TestCase):
+    """CP9-A: tầng glossary playlist nằm giữa dùng chung và tập."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.pl = self.root / "PL"
+        self.ep = self.pl / "ep"
+        self.ep.mkdir(parents=True)
+        (self.pl / "playlist.json").write_text("{}", encoding="utf-8")
+
+    def _write(self, path: Path, text: str) -> Path:
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_three_layers_order_and_paths(self) -> None:
+        shared = self._write(self.root / "s.yaml", "context: chung\nterms: {a: 1s, b: 1s, c: 1s}\nskip: [s1]\n")
+        plf = self._write(self.pl / GLOSSARY_FILENAME, "terms: {b: 2p, c: 2p}\nskip: [p1]\n")
+        epf = self._write(self.ep / GLOSSARY_FILENAME, "terms: {c: 3e}\nskip: [e1]\n")
+        glossary, paths = load_effective_glossary(self.ep, shared)
+        assert glossary is not None
+        self.assertEqual(glossary.terms, (("a", "1s"), ("b", "2p"), ("c", "3e")))
+        self.assertEqual(glossary.skip, ("s1", "p1", "e1"))
+        self.assertEqual(paths, [shared, plf, epf])
+
+    def test_playlist_skip_applies_without_episode_file(self) -> None:
+        plf = self._write(self.pl / GLOSSARY_FILENAME, "skip: [la la la]\n")
+        glossary, paths = load_effective_glossary(self.ep, None)
+        assert glossary is not None
+        self.assertTrue(glossary.should_skip("La la la"))
+        self.assertEqual(paths, [plf])
+
+    def test_no_playlist_file_is_unchanged(self) -> None:
+        epf = self._write(self.ep / GLOSSARY_FILENAME, "terms: {a: b}\n")
+        shared = self._write(self.root / "s.yaml", "terms: {c: d}\n")
+        with_pl_dir, _ = load_effective_glossary(self.ep, shared)
+        (self.pl / "playlist.json").unlink()
+        without, _ = load_effective_glossary(self.ep, shared)
+        assert with_pl_dir is not None and without is not None
+        self.assertEqual(with_pl_dir.sha256(), without.sha256())
+        self.assertEqual(load_effective_glossary(self.ep, None)[1], [epf])
+
+    def test_parent_without_playlist_json_ignored(self) -> None:
+        (self.pl / "playlist.json").unlink()
+        self._write(self.pl / GLOSSARY_FILENAME, "terms: {a: b}\n")
+        self.assertIsNone(playlist_glossary_path(self.ep))
+        self.assertEqual(load_effective_glossary(self.ep, None), (None, []))
+
+    def test_playlist_glossary_path_even_if_missing(self) -> None:
+        self.assertEqual(playlist_glossary_path(self.ep), self.pl / GLOSSARY_FILENAME)
+
+    def test_broken_playlist_file_is_error(self) -> None:
+        self._write(self.pl / GLOSSARY_FILENAME, "context: [unclosed\n")
+        with self.assertRaises(GlossaryError):
+            load_effective_glossary(self.ep, None)
 
 
 class TestWriteGlossary(unittest.TestCase):

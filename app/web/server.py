@@ -252,7 +252,10 @@ def create_app(
                 ep_key = library.make_key(f"{key.replace('~', '/')}/{rel}")
                 if ep_key in ep_by_key:
                     links[entry.get("index")] = ep_key
-        return render(request, "playlist.html", pl=pl, links=links)
+        gstate = web_glossary.read_playlist_glossary_state(
+            library.find_playlist(workspace, key), shared_glossary
+        )
+        return render(request, "playlist.html", pl=pl, links=links, gstate=gstate)
 
     @app.get("/ep/{key}")
     def episode_page(request: Request, key: str):
@@ -279,6 +282,67 @@ def create_app(
             ep=ep,
             gstate=web_glossary.read_glossary_state(path, shared_glossary),
         )
+
+    # ---- Glossary playlist (CP9-A) -----------------------------------------
+
+    def playlist_or_404(key: str) -> Path:
+        path = library.find_playlist(workspace, key)
+        if path is None:
+            raise HTTPException(status_code=404, detail="Không có playlist này.")
+        return path
+
+    @app.get("/pl/{key}/glossary")
+    def playlist_glossary_page(request: Request, key: str):
+        path = playlist_or_404(key)
+        playlists, _ = library.scan_workspace(workspace)
+        pl = next(p for p in playlists if p.key == key)
+        return render(
+            request,
+            "glossary.html",
+            pl=pl,
+            ep=None,
+            gstate=web_glossary.read_playlist_glossary_state(path, shared_glossary),
+        )
+
+    @app.get("/api/playlists/{key}/glossary")
+    def api_playlist_glossary(key: str):
+        path = playlist_or_404(key)
+        return web_glossary.read_playlist_glossary_state(path, shared_glossary).to_dict()
+
+    @app.put("/api/playlists/{key}/glossary")
+    async def api_playlist_glossary_save(request: Request, key: str):
+        check_origin(request)
+        path = playlist_or_404(key)
+        try:
+            data = json.loads(await request.body() or b"{}")
+        except ValueError:
+            return JSONResponse({"error": "Body không phải JSON hợp lệ."}, status_code=400)
+        content = data.get("content") if isinstance(data, dict) else None
+        base = data.get("base_sha256") if isinstance(data, dict) else None
+        if not isinstance(content, str) or not (base is None or isinstance(base, str)):
+            return JSONResponse(
+                {"error": "Cần `content` (chuỗi) và `base_sha256` (chuỗi hoặc null)."},
+                status_code=400,
+            )
+        try:
+            state = web_glossary.save_playlist_glossary_text(
+                path, content, base_sha256=base, shared_path=shared_glossary
+            )
+        except GlossaryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except web_glossary.GlossaryConflictError as exc:
+            current = web_glossary.read_playlist_glossary_state(path, shared_glossary).to_dict()
+            return JSONResponse({"error": str(exc), "state": current}, status_code=409)
+        return state.to_dict()
+
+    @app.post("/api/playlists/{key}/redub", status_code=201)
+    def api_playlist_redub(request: Request, key: str):
+        check_origin(request)
+        path = playlist_or_404(key)
+        try:
+            return job_manager.submit(web_glossary.playlist_redub_request(path, shared_glossary))
+        except JobValidationError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
 
     # ---- API glossary (WEB-2) -----------------------------------------------
 

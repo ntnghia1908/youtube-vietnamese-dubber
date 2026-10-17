@@ -317,15 +317,33 @@ def merge_glossaries(base: Glossary, override: Glossary) -> Glossary:
     )
 
 
+# Trùng app/pipeline/playlist.py; không import pipeline từ translation để tránh
+# vòng phụ thuộc (pipeline đã import translation).
+PLAYLIST_STATE_FILENAME = "playlist.json"
+
+
+def playlist_glossary_path(episode_dir: Path) -> Path | None:
+    """``<parent>/glossary.yaml`` nếu thư mục cha của tập có ``playlist.json``.
+
+    Trả path kể cả khi file chưa tồn tại: web cần biết chỗ để tạo. Tập lẻ
+    (cha là workspace, không có playlist.json) trả None.
+    """
+    parent = Path(episode_dir).parent
+    if (parent / PLAYLIST_STATE_FILENAME).is_file():
+        return parent / GLOSSARY_FILENAME
+    return None
+
+
 def load_effective_glossary(
     episode_dir: Path, shared_path: Path | None
 ) -> tuple[Glossary | None, list[Path]]:
-    """Glossary hiệu lực của một tập: file dùng chung rồi ``<ep>/glossary.yaml``.
+    """Glossary hiệu lực của một tập: dùng chung -> playlist -> ``<ep>/glossary.yaml``.
 
-    ``shared_path`` được chỉ định rõ mà không tồn tại là lỗi (gõ sai đường
-    dẫn thì phải báo, không lặng lẽ dịch không glossary); ``glossary.yaml``
-    của tập thì tuỳ chọn. Không file nào, hoặc kết quả rỗng, trả
-    ``(None, [])`` để hành vi dịch y hệt lúc không có glossary.
+    Tầng sau thắng tầng trước (``merge_glossaries``). ``shared_path`` được chỉ
+    định rõ mà không tồn tại là lỗi (gõ sai đường dẫn thì phải báo, không
+    lặng lẽ dịch không glossary); glossary playlist và glossary tập thì tuỳ
+    chọn. Không file nào, hoặc kết quả rỗng, trả ``(None, [])`` để hành vi
+    dịch y hệt lúc không có glossary.
     """
     paths: list[Path] = []
     effective: Glossary | None = None
@@ -337,12 +355,14 @@ def load_effective_glossary(
         effective = load_glossary(shared_path)
         paths.append(shared_path)
 
-    episode_path = Path(episode_dir) / GLOSSARY_FILENAME
-    if episode_path.exists():
-        episode_glossary = load_glossary(episode_path)
+    layers = [playlist_glossary_path(episode_dir), Path(episode_dir) / GLOSSARY_FILENAME]
+    for layer_path in layers:
+        if layer_path is None or not layer_path.exists():
+            continue
+        layer = load_glossary(layer_path)
         # Chỉ có một file thì giữ nguyên, không đi qua merge (merge gộp trùng khoá).
-        effective = episode_glossary if effective is None else merge_glossaries(effective, episode_glossary)
-        paths.append(episode_path)
+        effective = layer if effective is None else merge_glossaries(effective, layer)
+        paths.append(layer_path)
 
     if effective is None or effective.is_empty():
         return None, []

@@ -316,6 +316,48 @@ class TestServerGlossary(unittest.TestCase):
         _w(self.ep / "metadata.json", "{}")
         self.assertEqual(self.client.post("/api/episodes/v1__t/redub").status_code, 400)
 
+    def test_playlist_glossary_api(self) -> None:
+        pl = self.ws / "PL__x"
+        _w(pl / "playlist.json", json.dumps({"url": "https://www.youtube.com/playlist?list=PLx", "entries": [
+            {"index": 4, "title": "x", "episode_dir": "b__B"}]}))
+        _episode(pl / "b__B", "B")
+        url = "/api/playlists/PL__x/glossary"
+        st = self.client.get(url).json()
+        self.assertEqual((st["exists"], st["stale_items"], st["translated_items"]), (False, [], [4]))
+        self.assertEqual(self.client.post("/api/playlists/PL__x/redub").status_code, 400)
+        put = lambda body, **kw: self.client.put(url, content=json.dumps(body), **kw)  # noqa: E731
+        r = put({"content": self.GOOD, "base_sha256": None})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["stale_items"], [4])
+        sha = r.json()["file_sha256"]
+        r = put({"content": self.GOOD, "base_sha256": None})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["state"]["file_sha256"], sha)
+        self.assertEqual(put({"content": "a: [", "base_sha256": sha}).status_code, 400)
+        self.assertEqual(put({"base_sha256": sha}).status_code, 400)
+        page = self.client.get("/pl/PL__x/glossary")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("Dịch lại các tập cũ", page.text)
+        self.assertIn('data-api="/api/playlists/PL__x"', page.text)
+        self.assertIn("1 tập dịch bằng glossary cũ", self.client.get("/pl/PL__x").text)
+        self.assertIn("/pl/PL__x/glossary", self.client.get("/ep/PL__x~b__B/glossary").text)
+        r = self.client.post("/api/playlists/PL__x/redub")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["command"][3:5], ["playlist", "https://www.youtube.com/playlist?list=PLx"])
+        self.assertEqual(r.json()["command"][-3:], ["--items", "4", "--recheck"])
+
+    def test_playlist_glossary_unknown_and_origin(self) -> None:
+        for path in ("/pl/nope/glossary", "/api/playlists/nope/glossary"):
+            self.assertEqual(self.client.get(path).status_code, 404, path)
+        self.assertEqual(self.client.post("/api/playlists/nope/redub").status_code, 404)
+        _w(self.ws / "PL__x" / "playlist.json", json.dumps({"entries": []}))
+        evil = {"Origin": "http://evil.example"}
+        self.assertEqual(self.client.post("/api/playlists/PL__x/redub", headers=evil).status_code, 403)
+        r = self.client.put("/api/playlists/PL__x/glossary", headers=evil,
+                            content=json.dumps({"content": self.GOOD, "base_sha256": None}))
+        self.assertEqual(r.status_code, 403)
+        self.assertFalse((self.ws / "PL__x" / "glossary.yaml").exists())
+
     def test_api_jobs_glossary_kind(self) -> None:
         post = lambda body: self.client.post("/api/jobs", content=json.dumps(body))  # noqa: E731
         self.assertEqual(post({"kind": "glossary", "episode_key": "v1__t"}).status_code, 201)
