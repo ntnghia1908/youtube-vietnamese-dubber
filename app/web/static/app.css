@@ -24,6 +24,20 @@ video { width: 100%; max-width: 960px; background: #000; }
 #segments tr.active { background: #fff3b0; }
 #segments tr[data-status="too_long"] td:nth-child(5) { color: #b00020; font-weight: bold; }
 
+/* Episode trên màn hình lớn: danh sách câu cuộn TRONG khung riêng, không kéo cả
+   trang (scrollIntoView trên window từng đẩy video ra khỏi màn hình khi đang xem). */
+@media (min-width: 641px) {
+  #segments-box { position: relative; max-height: 60vh; overflow: auto; border: 1px solid #ddd; }
+  #segments-box thead th { position: sticky; top: 0; z-index: 1; }
+}
+/* Đủ rộng: video bên trái, danh sách câu bên phải. */
+@media (min-width: 1000px) {
+  main:has(.episode-layout) { max-width: 1700px; }
+  .episode-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
+  .player-col { position: sticky; top: .5rem; }
+  .segments-pane #segments-box { max-height: calc(100vh - 7rem); }
+}
+
 /* WEB-MOBILE: dùng tốt trên điện thoại. Rule chung ở đây vô hại với desktop;
    mọi thay đổi bố cục nằm trong media query bên dưới. */
 *, *::before, *::after { box-sizing: border-box; }
@@ -63,7 +77,9 @@ code { overflow-wrap: anywhere; }
   td.stage { display: inline-block; margin: .25rem .25rem 0 0; padding: .1rem .5rem; border-radius: 10px; font-size: .85em; text-align: left; }
   td.stage::before { content: attr(title) " "; font-weight: normal; color: inherit; }
 
-  /* Episode: video dính đầu màn hình khi cuộn danh sách câu. */
+  /* Episode: video dính đầu màn hình khi cuộn danh sách câu. player-col không
+     được tạo khung chứa riêng, nếu không sticky chỉ dính trong khung nhỏ đó. */
+  .player-col { display: contents; }
   .player { position: sticky; top: 0; z-index: 2; background: #fafafa; padding-bottom: .4rem; }
   video { max-height: 35vh; }
   #segments tr { scroll-margin-top: calc(var(--player-h, 0px) + .5rem); }

@@ -12,6 +12,8 @@
   {% elif gstate.stale %}<strong class="warn">bản dịch CŨ — cần dịch lại</strong>
   {% else %}bản dịch khớp glossary{% endif %}</p>
 
+<div class="episode-layout">
+<div class="player-col">
 {% if has_output or has_source %}
   <div class="player">
     <video id="video" controls preload="metadata"
@@ -26,8 +28,11 @@
 {% endif %}
 {% if not has_output %}<p class="warn">Chưa có <code>output_vi.mp4</code>{% if has_source %} — đang hiện bản gốc{% endif %}.</p>{% endif %}
 {% if not has_source and not has_output %}<p class="warn">Chưa có video nào.</p>{% endif %}
-
+</div>
+<div class="segments-pane">
 <label><input type="checkbox" id="only-too-long"> Chỉ hiện câu too_long</label>
+<label><input type="checkbox" id="auto-scroll" checked> Tự cuộn theo câu đang phát</label>
+<div id="segments-box">
 <table id="segments">
   <thead><tr><th>#</th><th>Thời gian</th><th>Gốc</th><th>Bản dịch</th><th>Status</th><th>Tempo</th></tr></thead>
   <tbody>
@@ -45,5 +50,8 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
+</div>
+</div>
 {% endblock %}
 {% block scripts %}<script src="/static/episode.js"></script>{% endblock %}

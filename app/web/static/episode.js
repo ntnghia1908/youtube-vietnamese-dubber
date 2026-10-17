@@ -3,6 +3,15 @@
   const video = document.getElementById("video");
   const rows = Array.from(document.querySelectorAll("#segments tr[data-start]"));
   const filter = document.getElementById("only-too-long");
+  const box = document.getElementById("segments-box");
+  const autoScroll = document.getElementById("auto-scroll");
+  // Nhớ lựa chọn tự cuộn theo trình duyệt; storage có thể bị chặn (private mode).
+  try {
+    if (localStorage.getItem("dubber.autoScroll") === "0") autoScroll.checked = false;
+  } catch (e) {}
+  autoScroll.addEventListener("change", () => {
+    try { localStorage.setItem("dubber.autoScroll", autoScroll.checked ? "1" : "0"); } catch (e) {}
+  });
 
   filter.addEventListener("change", () => {
     rows.forEach((r) => (r.hidden = filter.checked && r.dataset.status !== "too_long"));
@@ -34,9 +43,24 @@
     active = cur || null;
     if (active) {
       active.classList.add("active");
-      if (!active.hidden) active.scrollIntoView({ block: "nearest" });
+      if (!active.hidden && autoScroll.checked) reveal(active);
     }
   });
+
+  // Desktop: khung câu tự cuộn (overflow) -> chỉ cuộn khung, không đụng tới trang.
+  // Mobile: khung không cuộn riêng, video sticky -> scrollIntoView trên trang như cũ.
+  function reveal(row) {
+    if (box.scrollHeight <= box.clientHeight) {
+      row.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    const head = box.querySelector("thead");
+    const top = row.offsetTop - (head ? head.offsetHeight : 0);
+    const bottom = row.offsetTop + row.offsetHeight;
+    if (top < box.scrollTop || bottom > box.scrollTop + box.clientHeight) {
+      box.scrollTop = Math.max(0, top - box.clientHeight / 3);
+    }
+  }
 
   function switchTo(src) {
     if (!src || video.getAttribute("src") === src) return;
