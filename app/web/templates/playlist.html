@@ -6,14 +6,16 @@
 <p class="meta">Glossary playlist: <a href="/pl/{{ pl.key | urlencode }}/glossary">{{ "sửa" if gstate.exists else "tạo" }}</a>
   {% if gstate.stale_items %}— <span class="warn">{{ gstate.stale_items | length }} tập dịch bằng glossary cũ</span>{% endif %}</p>
 <table>
-  <thead><tr><th>#</th><th>Tiêu đề</th><th>Status</th><th>Đã tải</th><th>Giây</th><th>Lỗi</th></tr></thead>
+  <thead><tr><th>#</th><th>Tiêu đề</th><th>Status</th><th>Nguồn</th><th>Video</th><th>Giây</th><th>Lỗi</th></tr></thead>
   <tbody>
   {% for e in pl.entries %}
     <tr>
       <td data-label="#">{{ e.index }}</td>
       <td class="title-cell">{% if links.get(e.index) %}<a href="/ep/{{ links[e.index] | urlencode }}">{{ e.title }}</a>{% else %}{{ e.title }}{% endif %}</td>
       <td data-label="Status"><span class="badge st-{{ e.status }}">{{ e.status }}</span></td>
-      <td data-label="Đã tải">{{ "có" if e.downloaded else "chưa" }}</td>
+      <td data-label="Nguồn">{{ "có" if e.downloaded else "chưa" }}</td>
+      {% set ek = links.get(e.index) %}
+      <td data-label="Video">{% if ek and ek in outputs %}<a href="/download/{{ ek | urlencode }}" download>⬇ Tải</a>{% if outputs[ek] %} <span class="dl-done" title="Đã tải lúc {{ outputs[ek] | dl_time }}">✓ đã tải</span>{% endif %}{% else %}—{% endif %}</td>
       <td data-label="Giây">{{ e.seconds if e.seconds is not none else "—" }}</td>
       <td data-label="Lỗi">{% if e.error %}<pre class="err-full">{% if e.error_stage %}[{{ e.error_stage }}] {% endif %}{{ e.error }}</pre>{% endif %}</td>
     </tr>

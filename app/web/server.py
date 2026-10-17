@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from datetime import datetime
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -60,6 +62,15 @@ def _fmt_progress(progress: dict[str, Any] | None) -> str:
     return f"{prefix}{progress['index']}/{progress['total']} {progress['stage']} ({progress['state']})"
 
 
+def _fmt_dl_time(value: Any) -> str:
+    """ISO -> "HH:MM dd/mm/yyyy" theo múi giờ trong chuỗi; hỏng -> trả nguyên (fallback khi không có JS)."""
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except ValueError:
+        return str(value)
+    return f"{dt:%H:%M %d/%m/%Y}"
+
+
 def _truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -98,6 +109,7 @@ def create_app(
     templates = Jinja2Templates(directory=_WEB_DIR / "templates")
     templates.env.filters["duration"] = _fmt_duration
     templates.env.filters["progress"] = _fmt_progress
+    templates.env.filters["dl_time"] = _fmt_dl_time
     templates.env.globals["auth_enabled"] = password is not None
     throttle = auth.LoginThrottle()
 
@@ -255,7 +267,13 @@ def create_app(
         gstate = web_glossary.read_playlist_glossary_state(
             library.find_playlist(workspace, key), shared_glossary
         )
-        return render(request, "playlist.html", pl=pl, links=links, gstate=gstate)
+        # Tập có output_vi.mp4 -> hiện link tải + ✓ nếu đã tải (WEB-DOWNLOAD).
+        outputs = {
+            e.key: e.downloaded_at or ""
+            for e in pl.episodes
+            if e.stages.get("render") == "done"
+        }
+        return render(request, "playlist.html", pl=pl, links=links, gstate=gstate, outputs=outputs)
 
     @app.get("/ep/{key}")
     def episode_page(request: Request, key: str):
@@ -502,6 +520,41 @@ def create_app(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    # ---- Tải video lồng tiếng (WEB-DOWNLOAD) --------------------------------
+
+    def download_name(path: Path, ep: library.EpisodeSummary) -> str:
+        title = ep.title or ep.video_id or path.name
+        title = re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]', "", title)
+        title = re.sub(r"\s+", " ", title).strip()[:150].strip() or path.name
+        return f"{title} - lồng tiếng.mp4"
+
+    def output_or_404(key: str) -> tuple[Path, library.EpisodeSummary]:
+        path, ep = episode_or_404(key)
+        if not (path / OUTPUT_FILENAME).is_file():
+            raise HTTPException(status_code=404, detail="Chưa có output_vi.mp4.")
+        return path, ep
+
+    @app.get("/download/{key}")
+    def download(request: Request, key: str):
+        path, ep = output_or_404(key)
+        # Range = trình quản lý tải chia khúc/tải tiếp: không ghi lại dấu nếu còn hợp lệ.
+        if "range" not in request.headers or library.read_download_mark(path) is None:
+            library.write_download_mark(path)
+        return FileResponse(path / OUTPUT_FILENAME, media_type="video/mp4", filename=download_name(path, ep))
+
+    @app.post("/api/episodes/{key}/downloaded")
+    def api_mark_downloaded(request: Request, key: str):
+        check_origin(request)
+        path, _ = output_or_404(key)
+        return {"downloaded_at": library.write_download_mark(path)}
+
+    @app.delete("/api/episodes/{key}/downloaded")
+    def api_unmark_downloaded(request: Request, key: str):
+        check_origin(request)
+        path, _ = episode_or_404(key)
+        library.clear_download_mark(path)
+        return {"downloaded_at": None}
 
     # ---- API thư viện + media ----------------------------------------------
 

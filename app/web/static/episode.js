@@ -41,6 +41,40 @@
   filter.addEventListener("change", () => {
     rows.forEach((r) => (r.hidden = filter.checked && r.dataset.status !== "too_long"));
   });
+
+  // Tải video lồng tiếng: trình duyệt tự tải qua link; ở đây chỉ cập nhật dấu ✓ tại chỗ.
+  const dlBox = document.getElementById("download-box");
+  if (dlBox) {
+    const dlStatus = document.getElementById("download-status");
+    const dlClear = document.getElementById("download-clear");
+    const dlError = document.getElementById("download-error");
+    // "HH:MM dd/mm/yyyy" theo giờ trình duyệt, tự đệm 2 chữ số (không phụ thuộc locale).
+    const p2 = (n) => String(n).padStart(2, "0");
+    const fmt = (d) => p2(d.getHours()) + ":" + p2(d.getMinutes()) + " " + p2(d.getDate()) + "/" + p2(d.getMonth() + 1) + "/" + d.getFullYear();
+    dlStatus.querySelectorAll("time[datetime]").forEach((t) => {
+      const d = new Date(t.getAttribute("datetime"));
+      if (!isNaN(d)) t.textContent = fmt(d);
+    });
+    const showMark = (on, at) => {
+      dlStatus.hidden = !on;
+      dlClear.hidden = !on;
+      if (on) dlStatus.textContent = "✓ Đã tải" + (at ? " lúc " + fmt(at) : "");
+    };
+    document.getElementById("download-link").addEventListener("click", () => {
+      dlError.textContent = "";
+      showMark(true, new Date());
+    });
+    dlClear.addEventListener("click", async () => {
+      dlError.textContent = "";
+      try {
+        const r = await fetch("/api/episodes/" + encodeURIComponent(dlBox.dataset.key) + "/downloaded", { method: "DELETE" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        showMark(false);
+      } catch (e) {
+        dlError.textContent = "Không bỏ đánh dấu được: " + e.message;
+      }
+    });
+  }
   if (!video) return;
 
   // Mobile: player dính đầu màn hình (app.css) — báo chiều cao cho CSS để

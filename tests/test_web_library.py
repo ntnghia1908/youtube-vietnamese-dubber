@@ -165,3 +165,42 @@ class TestHasGlossary(unittest.TestCase):
             _write(ws / "b__B" / "glossary.yaml", "terms: {}\n")
             _, singles = library.scan_workspace(ws)
             self.assertEqual({e.rel_dir: e.has_glossary for e in singles}, {"a__A": False, "b__B": True})
+
+
+class TestDownloadMark(unittest.TestCase):
+    def test_write_read_clear_and_invalidate(self) -> None:
+        import os
+
+        with TemporaryDirectory() as tmp:
+            d = Path(tmp) / "a__A"
+            _full_episode(d)
+            self.assertIsNone(library.read_download_mark(d))
+            at = library.write_download_mark(d)
+            self.assertEqual(library.read_download_mark(d), at)
+            self.assertFalse((d / "web_download.json.tmp").exists())
+            _, singles = library.scan_workspace(Path(tmp))
+            self.assertEqual(singles[0].downloaded_at, at)
+            # Output đổi (render lại) -> mất dấu mà không sửa web_download.json.
+            st = (d / "output_vi.mp4").stat()
+            os.utime(d / "output_vi.mp4", ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+            self.assertIsNone(library.read_download_mark(d))
+            _, singles = library.scan_workspace(Path(tmp))
+            self.assertIsNone(singles[0].downloaded_at)
+            # Ghi lại rồi xoá; xoá lần hai không lỗi.
+            library.write_download_mark(d)
+            library.clear_download_mark(d)
+            library.clear_download_mark(d)
+            self.assertIsNone(library.read_download_mark(d))
+
+    def test_corrupt_json_and_missing_output(self) -> None:
+        with TemporaryDirectory() as tmp:
+            d = Path(tmp) / "a__A"
+            _full_episode(d)
+            _write(d / "web_download.json", "{hỏng")
+            self.assertIsNone(library.read_download_mark(d))
+            library.write_download_mark(d)
+            (d / "output_vi.mp4").unlink()
+            self.assertIsNone(library.read_download_mark(d))
+            with self.assertRaises(FileNotFoundError):
+                library.write_download_mark(d)
+

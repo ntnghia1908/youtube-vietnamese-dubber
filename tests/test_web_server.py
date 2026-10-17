@@ -206,6 +206,55 @@ class TestServer(unittest.TestCase):
         segs = self.client.get("/api/episodes/v1__t/segments").json()
         self.assertEqual([s["status"] for s in segs], ["too_long", "normal"])
 
+    def test_download_and_marks(self) -> None:
+        ep = self.ws / "PL__x" / "b__B"
+        _w(self.ws / "PL__x" / "playlist.json", json.dumps({"entries": [
+            {"index": 1, "title": "Tập 1", "status": "completed", "episode_dir": "b__B"},
+            {"index": 2, "title": "Tập 2", "status": "completed", "episode_dir": "c__C"}]}))
+        _episode(ep, 'Tập: 1 / "Đầu"?')
+        _episode(self.ws / "PL__x" / "c__C", "Tập 2", output=False)
+        key = "PL__x~b__B"
+        self.assertNotIn("✓ đã tải", self.client.get("/pl/PL__x").text)
+        r = self.client.get(f"/download/{key}")
+        self.assertEqual(r.status_code, 200)
+        disp = r.headers["content-disposition"]
+        self.assertTrue(disp.startswith("attachment"))
+        self.assertIn("filename*=utf-8''" + quote("Tập 1 Đầu - lồng tiếng.mp4"), disp)
+        self.assertEqual(r.content, (ep / "output_vi.mp4").read_bytes())
+        self.assertTrue((ep / "web_download.json").is_file())
+        page = self.client.get("/pl/PL__x").text
+        self.assertEqual(page.count("✓ đã tải"), 1)
+        self.assertIn("<th>Nguồn</th><th>Video</th>", page)
+        ep_html = self.client.get(f"/ep/{key}").text
+        self.assertIn("Đã tải lúc", ep_html)
+        self.assertIn("<time datetime=", ep_html)
+        from app.web.server import _fmt_dl_time
+        self.assertEqual(_fmt_dl_time("2026-10-17T21:05:11+07:00"), "21:05 17/10/2026")
+        self.assertEqual(_fmt_dl_time("không phải ngày"), "không phải ngày")
+        # AC4: output đổi -> mất dấu ở cả hai trang.
+        import os
+        st = (ep / "output_vi.mp4").stat()
+        os.utime(ep / "output_vi.mp4", ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+        self.assertNotIn("✓ đã tải", self.client.get("/pl/PL__x").text)
+        self.assertNotIn("Đã tải lúc", self.client.get(f"/ep/{key}").text)
+        # AC5: Range không ghi đè dấu hợp lệ.
+        at = self.client.post(f"/api/episodes/{key}/downloaded").json()["downloaded_at"]
+        mark = (ep / "web_download.json").read_text(encoding="utf-8")
+        r = self.client.get(f"/download/{key}", headers={"Range": "bytes=0-9"})
+        self.assertEqual(r.status_code, 206)
+        self.assertEqual((ep / "web_download.json").read_text(encoding="utf-8"), mark)
+        self.assertIn(at, mark)
+        # AC3: DELETE; 404 khi không có output / key lạ.
+        self.assertEqual(self.client.delete(f"/api/episodes/{key}/downloaded").json(), {"downloaded_at": None})
+        self.assertFalse((ep / "web_download.json").exists())
+        no_out = "PL__x~c__C"
+        self.assertEqual(self.client.get(f"/download/{no_out}").status_code, 404)
+        self.assertEqual(self.client.post(f"/api/episodes/{no_out}/downloaded").status_code, 404)
+        self.assertEqual(self.client.get("/download/nope").status_code, 404)
+        self.assertEqual(self.client.delete("/api/episodes/nope/downloaded").status_code, 404)
+        self.assertEqual(self.client.post(f"/api/episodes/{key}/downloaded",
+                                          headers={"Origin": "http://evil.example"}).status_code, 403)
+
     def test_server_creates_nothing_in_workspace(self) -> None:
         _episode(self.ws / "v1__t", "T")
         before = sorted(p.relative_to(self.ws).as_posix() for p in self.ws.rglob("*"))
@@ -437,7 +486,8 @@ class TestServerAuth(unittest.TestCase):
         self.assertEqual((r.status_code, r.headers["location"]), (303, "/login?next=%2Flibrary%3Fx%3D1"))
         for method, path in (("put", "/api/episodes/v1__t/glossary"), ("get", "/api/episodes/v1__t/glossary"),
                              ("post", "/api/episodes/v1__t/redub"), ("post", "/api/episodes/v1__t/glossary/draft"),
-                             ("get", "/ep/v1__t/glossary"), ("get", "/api/jobs"), ("get", "/media/v1__t/output"),
+                             ("get", "/ep/v1__t/glossary"), ("get", "/api/jobs"), ("get", "/media/v1__t/output"), ("get", "/download/v1__t"),
+                             ("post", "/api/episodes/v1__t/downloaded"), ("delete", "/api/episodes/v1__t/downloaded"),
                              ("get", "/api/jobs/x/events"), ("post", "/api/jobs"), ("get", "/library")):
             r = getattr(self.client, method)(path, follow_redirects=False)
             self.assertEqual(r.status_code, 401, path)

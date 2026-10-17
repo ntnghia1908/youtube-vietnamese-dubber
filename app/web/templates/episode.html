@@ -27,6 +27,14 @@
     </div>
   </div>
 {% endif %}
+{% if has_output %}
+  <div class="download-box" id="download-box" data-key="{{ ep.key }}">
+    <a class="btn btn-primary" id="download-link" href="/download/{{ ep.key | urlencode }}" download>⬇ Tải video lồng tiếng</a>
+    <span class="dl-done" id="download-status"{% if not ep.downloaded_at %} hidden{% endif %}>✓ Đã tải{% if ep.downloaded_at %} lúc <time datetime="{{ ep.downloaded_at }}">{{ ep.downloaded_at | dl_time }}</time>{% endif %}</span>
+    <button type="button" id="download-clear"{% if not ep.downloaded_at %} hidden{% endif %}>Bỏ đánh dấu</button>
+    <span class="error" id="download-error" role="alert"></span>
+  </div>
+{% endif %}
 {% if not has_output %}<p class="warn">Chưa có <code>output_vi.mp4</code>{% if has_source %} — đang hiện bản gốc{% endif %}.</p>{% endif %}
 {% if not has_source and not has_output %}<p class="warn">Chưa có video nào.</p>{% endif %}
 </div>

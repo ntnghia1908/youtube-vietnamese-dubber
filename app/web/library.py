@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,9 @@ from app.tts.synthesize import MANIFEST_FILENAME, TTS_DIRNAME
 from app.youtube.download import METADATA_FILENAME, SOURCE_FILENAME
 
 logger = logging.getLogger(__name__)
+
+# Dấu "đã tải về máy" là dữ liệu riêng của web; pipeline không đọc/ghi, --force không xoá.
+WEB_DOWNLOAD_FILENAME = "web_download.json"
 
 # Stage -> các artifact (tương đối episode_dir) phải có đủ để coi là "done".
 _STAGE_ARTIFACTS: dict[str, tuple[str, ...]] = {
@@ -50,6 +55,7 @@ class EpisodeSummary:
     stages: dict[str, str]
     too_long_count: int | None
     has_glossary: bool = False
+    downloaded_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +107,52 @@ def _too_long_count(episode_dir: Path) -> int | None:
     return sum(1 for s in data["segments"] if isinstance(s, dict) and s.get("status") == "too_long")
 
 
+def _output_fingerprint(episode_dir: Path) -> tuple[int, int] | None:
+    try:
+        st = (episode_dir / OUTPUT_FILENAME).stat()
+    except OSError:
+        return None
+    return st.st_size, st.st_mtime_ns
+
+
+def read_download_mark(episode_dir: Path) -> str | None:
+    """``downloaded_at`` nếu dấu còn khớp đúng file output hiện tại (size + mtime_ns).
+
+    Gắn dấu với file cụ thể để render lại (dịch lại...) tự làm mất ✓ mà pipeline
+    không cần biết gì; thiếu file/JSON hỏng/output đổi -> None.
+    """
+    data = _read_json(episode_dir / WEB_DOWNLOAD_FILENAME)
+    fp = _output_fingerprint(episode_dir)
+    if not isinstance(data, dict) or fp is None:
+        return None
+    at = data.get("downloaded_at")
+    if (
+        isinstance(at, str)
+        and data.get("output_size") == fp[0]
+        and data.get("output_mtime_ns") == fp[1]
+    ):
+        return at
+    return None
+
+
+def write_download_mark(episode_dir: Path) -> str:
+    """Ghi atomic dấu của output_vi.mp4 hiện tại; trả ``downloaded_at`` (ISO, giờ local)."""
+    fp = _output_fingerprint(episode_dir)
+    if fp is None:
+        raise FileNotFoundError(OUTPUT_FILENAME)
+    at = datetime.now().astimezone().isoformat(timespec="seconds")
+    payload = {"downloaded_at": at, "output_size": fp[0], "output_mtime_ns": fp[1]}
+    final = episode_dir / WEB_DOWNLOAD_FILENAME
+    tmp = episode_dir / (WEB_DOWNLOAD_FILENAME + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, final)
+    return at
+
+
+def clear_download_mark(episode_dir: Path) -> None:
+    (episode_dir / WEB_DOWNLOAD_FILENAME).unlink(missing_ok=True)
+
+
 def _summarize_episode(episode_dir: Path, rel_dir: str, playlist_key: str | None) -> EpisodeSummary:
     meta = _read_json(episode_dir / METADATA_FILENAME)
     if not isinstance(meta, dict):
@@ -116,6 +168,7 @@ def _summarize_episode(episode_dir: Path, rel_dir: str, playlist_key: str | None
         stages=_stage_states(episode_dir),
         too_long_count=_too_long_count(episode_dir),
         has_glossary=(episode_dir / GLOSSARY_FILENAME).is_file(),
+        downloaded_at=read_download_mark(episode_dir),
     )
 
 

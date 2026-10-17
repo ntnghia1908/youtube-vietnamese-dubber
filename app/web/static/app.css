@@ -134,6 +134,19 @@ tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: var(--surface-2); }
 .url { word-break: break-all; color: var(--text-muted); }
 
+/* Tải video lồng tiếng (WEB-DOWNLOAD): link dạng nút + dấu ✓ đã tải. */
+a.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; line-height: 1.4;
+  background: var(--surface); color: var(--text); text-decoration: none;
+}
+a.btn.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+a.btn.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.download-box { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin: var(--sp-3) 0; }
+.download-box [hidden] { display: none; }
+.dl-done { color: var(--ok, var(--accent)); font-weight: 600; }
+@media (max-width: 720px) { a.btn { min-height: 44px; padding: 0 var(--sp-4); } }
+
 /* Badge trạng thái: mỗi status đặt cặp màu --b-fg/--b-bg, badge và ô stage dùng chung. */
 .st-completed, .st-done { --b-fg: var(--ok); --b-bg: var(--ok-bg); }
 .st-running { --b-fg: var(--warn); --b-bg: var(--warn-bg); }
