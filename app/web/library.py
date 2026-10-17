@@ -131,10 +131,20 @@ def scan_workspace(workspace: Path) -> tuple[list[PlaylistSummary], list[Episode
                 state = {}
             raw_entries = state.get("entries")
             entries = [e for e in raw_entries if isinstance(e, dict)] if isinstance(raw_entries, list) else []
+            # Tên thư mục tập mở đầu bằng video id nên sắp theo tên ra thứ tự lộn xộn;
+            # sắp theo index trong playlist.json, tập không có trong entries xếp cuối.
+            index_by_dir = {
+                Path(e["episode_dir"]).name: e["index"]
+                for e in entries
+                if isinstance(e.get("episode_dir"), str) and isinstance(e.get("index"), int)
+            }
+            episode_dirs = sorted(
+                (sub for sub in _subdirs(top) if (sub / METADATA_FILENAME).is_file()),
+                key=lambda sub: (index_by_dir.get(sub.name, float("inf")), sub.name),
+            )
             episodes = [
                 _summarize_episode(sub, f"{top.name}/{sub.name}", make_key(top.name))
-                for sub in _subdirs(top)
-                if (sub / METADATA_FILENAME).is_file()
+                for sub in episode_dirs
             ]
             playlists.append(
                 PlaylistSummary(

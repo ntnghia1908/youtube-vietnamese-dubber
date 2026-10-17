@@ -82,6 +82,21 @@ class TestScanWorkspace(unittest.TestCase):
         self.assertEqual(playlists[0].episodes[0].playlist_key, playlists[0].key)
         self.assertEqual(playlists[0].episodes[0].key, "PL1__list~a__A")
 
+    def test_playlist_episodes_sorted_by_index(self) -> None:
+        pl = self.ws / "PL__x"
+        _json(pl / "playlist.json", {"entries": [
+            {"index": 1, "title": "Một", "episode_dir": "zz__One"},
+            {"index": 2, "title": "Hai", "episode_dir": "aa__Two"},
+            {"index": 10, "title": "Mười", "episode_dir": "mm__Ten"},
+        ]})
+        for name in ("aa__Two", "mm__Ten", "zz__One", "bb__Orphan"):
+            _json(pl / name / "metadata.json", {"id": name})
+        playlists, _ = library.scan_workspace(self.ws)
+        self.assertEqual(
+            [Path(e.rel_dir).name for e in playlists[0].episodes],
+            ["zz__One", "aa__Two", "mm__Ten", "bb__Orphan"],
+        )
+
     def test_download_needs_both_source_and_metadata(self) -> None:
         d = self.ws / "v__t"
         _json(d / "metadata.json", {"id": "v"})
