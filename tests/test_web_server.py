@@ -6,6 +6,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib.parse import quote
 
 try:
     from fastapi.testclient import TestClient
@@ -212,6 +213,134 @@ class TestServer(unittest.TestCase):
             self.client.get(path)
         after = sorted(p.relative_to(self.ws).as_posix() for p in self.ws.rglob("*"))
         self.assertEqual(before, after)
+
+
+@unittest.skipUnless(HAVE_WEB, "cần `pip install -e .[web]`")
+class TestServerAuth(unittest.TestCase):
+    """WEB-AUTH: create_app(..., password=...) — AC3–AC9."""
+
+    PW = "mật-khẩu-thử"
+    HTML = {"Accept": "text/html"}
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.ws = Path(self._tmp.name)
+        self.manager = JobManager(self.ws, None, python="py", popen=lambda cmd, **kw: FakeProc(cmd))
+        self.addCleanup(self.manager.stop)
+        _episode(self.ws / "v1__t", "T")
+        self.client = self.make_client()
+
+    def make_client(self, password: str | None = None) -> "TestClient":
+        app = create_app(self.ws, self.manager, allowed_hosts=("testserver",), password=password or self.PW)
+        return TestClient(app)
+
+    def login(self, client: "TestClient", pw: str | None = None, nxt: str = "/library"):
+        return client.post("/login", content=f"password={quote(pw or self.PW)}&next={quote(nxt, safe='')}",
+                           headers={"Content-Type": "application/x-www-form-urlencoded"},
+                           follow_redirects=False)
+
+    def test_no_password_has_no_login_routes(self) -> None:
+        plain = TestClient(create_app(self.ws, self.manager, allowed_hosts=("testserver",)))
+        self.assertEqual(plain.get("/login").status_code, 404)
+        self.assertEqual(plain.post("/logout").status_code, 404)
+        self.assertEqual(plain.get("/library").status_code, 200)
+        self.assertNotIn("Đăng xuất", plain.get("/library").text)
+        empty = TestClient(create_app(self.ws, self.manager, allowed_hosts=("testserver",), password=""))
+        self.assertEqual(empty.get("/library").status_code, 200)
+
+    def test_unauthenticated(self) -> None:
+        r = self.client.get("/library?x=1", headers=self.HTML, follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (303, "/login?next=%2Flibrary%3Fx%3D1"))
+        for method, path in (("get", "/api/jobs"), ("get", "/media/v1__t/output"),
+                             ("get", "/api/jobs/x/events"), ("post", "/api/jobs"), ("get", "/library")):
+            r = getattr(self.client, method)(path, follow_redirects=False)
+            self.assertEqual(r.status_code, 401, path)
+            self.assertEqual(r.json(), {"detail": "Cần đăng nhập."})
+        self.assertEqual(self.client.get("/static/app.css").status_code, 200)
+        self.assertEqual(self.client.get("/login").status_code, 200)
+
+    def test_host_checked_before_auth(self) -> None:
+        r = self.client.get("/api/jobs", headers={"Host": "evil.example"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_login_page_content(self) -> None:
+        r = self.client.get("/login?next=/ep/v1__t")
+        self.assertIn('type="password"', r.text)
+        self.assertIn('name="next" value="/ep/v1__t"', r.text)
+        self.assertNotIn(self.PW, r.text)
+
+    def test_login_ok_cookie_and_access(self) -> None:
+        r = self.login(self.client)
+        self.assertEqual((r.status_code, r.headers["location"]), (303, "/library"))
+        cookie = r.headers["set-cookie"].lower()
+        for part in ("dubber_session=", "max-age=2592000", "path=/", "httponly", "samesite=strict"):
+            self.assertIn(part, cookie)
+        self.assertNotIn("secure", cookie)
+        self.assertNotIn(self.PW.lower(), cookie)
+        self.assertEqual(self.client.get("/library").status_code, 200)
+        self.assertIn("Đăng xuất", self.client.get("/library").text)
+        self.assertEqual(self.client.get("/api/jobs").status_code, 200)
+        r = self.client.get("/media/v1__t/output", headers={"Range": "bytes=0-1023"})
+        self.assertEqual((r.status_code, len(r.content)), (206, 1024))
+        job = self.client.post("/api/jobs", json={"kind": "dub", "url": VIDEO}).json()
+        # SSE: job lạ -> 404 (đã qua auth; chưa đăng nhập là 401). Stream thật kiểm ở "Chạy thật".
+        self.assertEqual(self.client.get("/api/jobs/khong-co/events").status_code, 404)
+        self.assertNotIn(self.PW, json.dumps(job))
+        # đã đăng nhập thì /login đẩy về next
+        r = self.client.get("/login?next=/jobs", follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (303, "/jobs"))
+
+    def test_open_redirect_blocked(self) -> None:
+        for bad in ("//evil.example", "https://evil.example"):
+            c = self.make_client()
+            r = self.login(c, nxt=bad)
+            self.assertEqual((r.status_code, r.headers["location"]), (303, "/"), bad)
+
+    def test_wrong_password_then_throttle(self) -> None:
+        for _ in range(5):
+            r = self.login(self.client, "sai")
+            self.assertEqual(r.status_code, 401)
+            self.assertIn("Sai mật khẩu", r.text)
+        r = self.login(self.client)  # đúng nhưng đã bị khoá
+        self.assertEqual(r.status_code, 429)
+        self.assertIn("thử lại sau", r.text)
+        self.assertEqual(self.client.get("/api/jobs").status_code, 401)
+
+    def test_success_resets_counter(self) -> None:
+        for _ in range(4):
+            self.login(self.client, "sai")
+        self.assertEqual(self.login(self.client).status_code, 303)
+        for _ in range(4):
+            self.assertEqual(self.login(self.client, "sai").status_code, 401)
+
+    def test_invalid_cookies(self) -> None:
+        from app.web import auth
+
+        good = auth.make_session(self.PW)
+        bad_sig = good[:-1] + ("0" if good[-1] != "0" else "1")
+        expired = auth.make_session(self.PW, now=1000)
+        other_pw = auth.make_session("mật khẩu cũ")
+        for cookie in (bad_sig, expired, other_pw, "rac"):
+            c = self.make_client()
+            c.cookies.set(auth.COOKIE_NAME, cookie)
+            self.assertEqual(c.get("/api/jobs").status_code, 401, cookie)
+        c = self.make_client()
+        c.cookies.set(auth.COOKIE_NAME, good)
+        self.assertEqual(c.get("/api/jobs").status_code, 200)
+
+    def test_logout_and_origin(self) -> None:
+        self.login(self.client)
+        evil = {"Origin": "http://evil.example"}
+        self.assertEqual(self.client.post("/logout", headers=evil).status_code, 403)
+        self.assertEqual(self.client.get("/api/jobs").status_code, 200)
+        r = self.client.post("/logout", follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (303, "/login"))
+        self.assertIn("max-age=0", r.headers["set-cookie"].lower())
+        self.assertEqual(self.client.get("/api/jobs").status_code, 401)
+        r = self.client.post("/login", content=f"password={quote(self.PW)}", headers={
+            **evil, "Content-Type": "application/x-www-form-urlencoded"})
+        self.assertEqual(r.status_code, 403)
 
 
 if __name__ == "__main__":

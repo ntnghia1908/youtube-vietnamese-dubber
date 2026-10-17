@@ -10,18 +10,18 @@ Chỉ ghi operational state không suy ra được từ Git, task contract hoặ
 
 Đã xong tới **CP8** (`dub` end-to-end, `playlist` với luồng tải song song + resume qua `playlist.json`). Playlist thật đang dùng: `PLJVKAfvqjvcp9lhYU37emhlRZExZrx0Cm` (22 tập, EP13–21 Private, tập dài 18–36 phút, ~35 phút xử lý/tập). EP1 đã `completed`, EP2 đã có transcript.
 
-**WEB-1** READY (Web UI local: nhập URL + jobs + thư viện + player; `docs/tasks/WEB-1-jobs-library-player.md`) — chờ HUMAN LEAD chạy Manual test checklist. Tiếp theo WEB-2 (glossary, boundary ADR-001), rồi CP9 (ADR-001 D5).
+**WEB-1** READY, **WEB-AUTH** READY (đăng nhập bằng mật khẩu khi bind LAN, ADR-001 mục 9; mật khẩu ở `~/.config/dubber/web.env`, nạp qua `~/.bashrc`) — chờ HUMAN LEAD chạy Manual test checklist. HUMAN LEAD 2026-10-17: làm **WEB-2** (`docs/tasks/WEB-2-glossary-editor.md`) trong lúc tạo/nghe output EP1; nghe xong mới chọn hạng mục CP9.
 
 ## Next proposed action
 
 PROPOSED, không authorize implementation:
 
-0. HUMAN LEAD test tay WEB-1 bằng trình duyệt (gồm một job playlist `items=1`); sau đó `/spec WEB-2`.
+0. Tạo output EP1 của playlist thật trên máy Linux (job playlist `items=1` qua web — đồng thời là manual test WEB-1/WEB-AUTH), HUMAN LEAD nghe, rồi chọn **một** hạng mục CP9 và `/spec CP9`.
 1. **Checkpoint 9 — Quality improvements** (plan §CP9: chọn **một** hạng mục mỗi lần, chỉ sau khi đánh giá output thật). Việc đầu tiên: **nghe `output_vi.mp4` của EP1** — chưa ai nghe bằng tai output nào từ CP6. Ứng viên theo số liệu đã đo:
    1. *Câu dịch quá dài*: EP1 có 79/353 câu `too_long` (22%) — vượt `timing.max_tempo` 1.25. Hướng: prompt rút gọn / dịch lại riêng câu too_long với giới hạn ký tự (plan mục 5 "translation shortening").
    2. *Nhiều giọng*: một giọng HoaiMy đọc cả vai ba lẫn con (plan mục 6–8).
    3. *Dịch 2 tập song song* (tốc độ): nhanh hơn 1.33× ở bước dịch với `OLLAMA_NUM_PARALLEL=2` — số đo ở `docs/SETUP.md` mục A4.
-2. **Web UI local** — WEB-1 → WEB-2 theo ADR-001 (ACCEPTED); làm trước CP9.
+2. **WEB-2** (glossary) — đang làm, song song với việc nghe output (bước 0).
 
 Nợ riêng, làm bằng `fix(...)` (S1), không phải checkpoint:
 

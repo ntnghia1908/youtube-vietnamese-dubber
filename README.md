@@ -209,8 +209,13 @@ python -m app web --workspace output   # mở http://127.0.0.1:8765
 - **Episode** (`/ep/...`): player `output_vi.mp4`/`source.mp4` (chuyển giữ thời điểm),
   bảng câu dịch click-để-tua, lọc `too_long`.
 - Cấu hình: section `web` (`host`, `port`) trong `config.yaml`, hoặc `--host`/`--port`.
-- Giới hạn: một job chạy một lúc (hàng đợi FIFO); **không có xác thực**, mặc định
-  chỉ bind `127.0.0.1` — đừng mở ra mạng. Tắt server giữa chừng thì job đang chạy
+- Dùng trên LAN: đặt mật khẩu qua biến môi trường rồi bind IP LAN:
+  `DUBBER_WEB_PASSWORD='...' python -m app web --host <IP LAN>`. Không đặt mật khẩu mà
+  bind ngoài localhost thì server từ chối chạy (exit 2). Đăng nhập đúng được cookie phiên
+  30 ngày (đổi mật khẩu thì phải đăng nhập lại), sai 5 lần/5 phút từ một IP bị khoá tạm.
+  **Kết nối là HTTP, không mã hoá** — mật khẩu đi qua mạng dạng rõ, chỉ dùng trong LAN tin cậy.
+  Bind `127.0.0.1` không đặt mật khẩu thì không đăng nhập.
+- Giới hạn: một job chạy một lúc (hàng đợi FIFO). Tắt server giữa chừng thì job đang chạy
   thành `interrupted` (tiến trình pipeline con có thể còn chạy nốt, xem
   `docs/decisions/WEB-1.md`).
 

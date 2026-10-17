@@ -136,3 +136,9 @@ Required verification mỗi phase (theo profile §4 luật 1 + Test policy): uni
 | D6 | Governance cho đợt Web | giữ `task` (APPROVE TASK từng phase); hoặc chuyển `boundary` cho WEB-1..3 nếu muốn ít bước duyệt |
 
 Trả lời của HUMAN LEAD (2026-10-17): D1–D5 theo cột khuyến nghị; D6 = `boundary` (mục 0).
+
+## 9. Sửa đổi 2026-10-17 — D1-B (LAN + mật khẩu)
+
+HUMAN LEAD (2026-10-17), sau khi thực tế chạy web trên LAN (`--host 10.8.102.102`): chấp nhận **D1-B ở mức tối thiểu** — được bind ngoài localhost **chỉ khi** bật đăng nhập bằng một mật khẩu duy nhất, lấy từ biến môi trường (không lưu trong file). Làm thành task riêng `WEB-AUTH`, implement **trước** WEB-2 (WEB-2 thêm route ghi file). Không thêm dependency (stdlib `hmac`/`secrets`). Không HTTPS, không nhiều user — chấp nhận rủi ro mật khẩu đi plaintext trên LAN tin cậy.
+
+`WEB-AUTH` **không** nằm trong boundary mục 0 (security model) → cần `APPROVE TASK` cho contract `docs/tasks/WEB-AUTH-password-login.md`.

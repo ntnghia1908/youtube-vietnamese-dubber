@@ -48,5 +48,5 @@ pipeline:
   max_consecutive_failures: 3   # `playlist`: dừng sau N tập lỗi liên tiếp (lỗi hệ thống: Ollama tắt, hết mạng...); 0 = không dừng
 
 web:
-  host: 127.0.0.1   # `python -m app web`: CHỈ bind localhost (không có auth, chạy subprocess theo form). Mở LAN là quyết định riêng (ADR-001 D1-B)
+  host: 127.0.0.1   # `python -m app web`: mặc định chỉ bind localhost. Mở LAN (host khác loopback) bắt buộc đặt biến môi trường DUBBER_WEB_PASSWORD (ADR-001 mục 9)
   port: 8765        # 1–65535

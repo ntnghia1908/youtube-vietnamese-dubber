@@ -95,8 +95,9 @@ class MixingConfig:
 
 @dataclass(frozen=True)
 class WebConfig:
-    # Chỉ bind localhost: server không có auth và chạy subprocess theo input
-    # form (ADR-001 D1). Mở ra LAN là quyết định riêng, không phải mặc định.
+    # Mặc định chỉ bind localhost vì server chạy subprocess theo input form
+    # (ADR-001 D1). Bind ngoài localhost bắt buộc đặt biến môi trường
+    # DUBBER_WEB_PASSWORD (ADR-001 mục 9), nếu không `web` từ chối chạy.
     host: str = "127.0.0.1"
     port: int = 8765
 

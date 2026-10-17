@@ -21,6 +21,7 @@ Flag CLI để mặc định ``None`` để phân biệt "không truyền" với
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 from dataclasses import replace
@@ -922,6 +923,7 @@ def _cmd_playlist(args: argparse.Namespace, config: AppConfig) -> int:
 
 def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
     from app.config import validate_web_port
+    from app.web.auth import PASSWORD_ENV, is_loopback
 
     host = args.host if args.host is not None else config.web.host
     port = args.port if args.port is not None else config.web.port
@@ -944,10 +946,19 @@ def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
         )
         return 2
 
-    if host not in ("127.0.0.1", "localhost", "::1"):
+    # Mật khẩu chỉ đọc từ môi trường (không flag, không config) để không lọt
+    # vào lịch sử shell, `ps` hay file cấu hình (ADR-001 mục 9).
+    password = os.environ.get(PASSWORD_ENV) or None
+    if password is None and not is_loopback(host):
         print(
-            f"[web] CẢNH BÁO: bind {host} — server KHÔNG có xác thực và chạy lệnh theo form; "
-            "bất kỳ ai trong mạng đều điều khiển được máy này.",
+            f"[web] LỖI: bind {host} cần mật khẩu — đặt biến môi trường "
+            f"{PASSWORD_ENV} rồi chạy lại.",
+            file=sys.stderr,
+        )
+        return 2
+    if password is not None and not is_loopback(host):
+        print(
+            "[web] Đăng nhập bằng mật khẩu đang BẬT; kết nối là HTTP (không mã hoá).",
             file=sys.stderr,
             flush=True,
         )
@@ -956,6 +967,7 @@ def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
         port,
         workspace,
         Path(args.config) if args.config else None,
+        password,
     )
     return 0
 

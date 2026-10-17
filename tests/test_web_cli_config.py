@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import subprocess
 import sys
 import unittest
@@ -10,6 +11,7 @@ from contextlib import redirect_stderr
 from unittest.mock import patch
 
 from app import cli
+from app.web.auth import PASSWORD_ENV
 from app.config import AppConfig, ConfigError, WebConfig, parse_config
 
 
@@ -63,21 +65,51 @@ class TestWebCommand(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn('pip install -e ".[web]"', err.getvalue())
 
-    def test_flag_overrides_config_and_warns_on_non_loopback(self) -> None:
+    def _run_web(self, argv, env_password):
+        """Chạy `cli.main` với `run` giả; trả (exit, calls, stderr)."""
         calls = []
         fake = type(sys)("app.web.server")
         fake.run = lambda *a: calls.append(a)
         config = parse_config({"web": {"host": "127.0.0.1", "port": 1111}, "workspace": "ws"})
+        env = {} if env_password is None else {PASSWORD_ENV: env_password}
         err = io.StringIO()
         with patch.object(cli, "_load_config", return_value=config), \
-                patch.dict(sys.modules, {"app.web.server": fake}), redirect_stderr(err):
-            self.assertEqual(cli.main(["web"]), 0)
-            self.assertEqual(cli.main(["web", "--host", "0.0.0.0", "--port", "2222", "--workspace", "w2"]), 0)
-        self.assertEqual(str(calls[0][2]), "ws")
-        self.assertEqual(calls[0][:2], ("127.0.0.1", 1111))
-        self.assertEqual(calls[1][:2], ("0.0.0.0", 2222))
-        self.assertEqual(str(calls[1][2]), "w2")
-        self.assertEqual(err.getvalue().count("CẢNH BÁO"), 1)  # chỉ lần bind 0.0.0.0
+                patch.dict(sys.modules, {"app.web.server": fake}), \
+                patch.dict(os.environ, env), redirect_stderr(err):
+            if env_password is None:
+                os.environ.pop(PASSWORD_ENV, None)
+            code = cli.main(argv)
+        return code, calls, err.getvalue()
+
+    def test_flag_overrides_config(self) -> None:
+        code, calls, _ = self._run_web(["web"], None)
+        self.assertEqual((code, calls[0][:2], str(calls[0][2])), (0, ("127.0.0.1", 1111), "ws"))
+        code, calls, _ = self._run_web(
+            ["web", "--host", "10.0.0.5", "--port", "2222", "--workspace", "w2"], "pw")
+        self.assertEqual((code, calls[0][:2], str(calls[0][2])), (0, ("10.0.0.5", 2222), "w2"))
+
+    def test_startup_rule_table(self) -> None:
+        # (host, mật khẩu env) -> (exit, mật khẩu truyền cho run)
+        cases = [
+            ("127.0.0.1", None, 0, None),
+            ("127.0.0.1", "", 0, None),
+            ("127.0.0.1", "pw", 0, "pw"),
+            ("10.0.0.5", None, 2, None),
+            ("10.0.0.5", "", 2, None),
+            ("10.0.0.5", "pw", 0, "pw"),
+        ]
+        for host, pw, want_code, want_pw in cases:
+            code, calls, err = self._run_web(["web", "--host", host], pw)
+            with self.subTest(host=host, pw=pw):
+                self.assertEqual(code, want_code)
+                if want_code == 2:
+                    self.assertEqual(calls, [])  # không bind
+                    self.assertIn("DUBBER_WEB_PASSWORD", err)
+                else:
+                    self.assertEqual(calls[0][4], want_pw)
+                    self.assertNotIn("pw", err.replace("password", ""))
+        _, _, err = self._run_web(["web", "--host", "10.0.0.5"], "pw")
+        self.assertIn("HTTP (không mã hoá)", err)
 
 
 if __name__ == "__main__":

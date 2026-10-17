@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -26,7 +26,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.audio.render import OUTPUT_FILENAME
 from app.pipeline.dub import STAGES
-from app.web import library
+from app.web import auth, library
 from app.web.jobs import (
     JOB_KINDS,
     TERMINAL_STATUSES,
@@ -77,8 +77,10 @@ def create_app(
     job_manager: JobManager,
     *,
     allowed_hosts: tuple[str, ...] = (),
+    password: str | None = None,
 ) -> FastAPI:
     workspace = Path(workspace)
+    password = password or None  # chuỗi rỗng = tắt auth
     origin_hosts = _LOCAL_HOSTS | {h.lower() for h in allowed_hosts}
 
     @asynccontextmanager
@@ -94,6 +96,30 @@ def create_app(
     templates = Jinja2Templates(directory=_WEB_DIR / "templates")
     templates.env.filters["duration"] = _fmt_duration
     templates.env.filters["progress"] = _fmt_progress
+    templates.env.globals["auth_enabled"] = password is not None
+    throttle = auth.LoginThrottle()
+
+    # Starlette: middleware đăng ký SAU chạy NGOÀI cùng. Auth đăng ký trước
+    # check_host để Host lạ bị chặn (400) trước khi chạm tới logic đăng nhập.
+    if password is not None:
+
+        @app.middleware("http")
+        async def require_login(request: Request, call_next):
+            """Mọi path (trừ /login, /static/) cần cookie phiên hợp lệ.
+
+            Làm theo path chứ không theo decorator từng route để route thêm sau
+            (WEB-2) mặc định được bảo vệ.
+            """
+            path = request.url.path
+            if path in auth.PUBLIC_PATHS or path.startswith("/static/"):
+                return await call_next(request)
+            if auth.verify_session(request.cookies.get(auth.COOKIE_NAME), password):
+                return await call_next(request)
+            wants_html = "text/html" in request.headers.get("accept", "")
+            if request.method in ("GET", "HEAD") and wants_html:
+                target = path + (f"?{request.url.query}" if request.url.query else "")
+                return RedirectResponse(f"/login?next={quote(target, safe='')}", status_code=303)
+            return JSONResponse({"detail": "Cần đăng nhập."}, status_code=401)
 
     @app.middleware("http")
     async def check_host(request: Request, call_next):
@@ -137,6 +163,55 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=404, detail="Không có job này.")
         return job
+
+    # ---- đăng nhập (chỉ khi bật mật khẩu) ----------------------------------
+
+    if password is not None:
+
+        def login_page(request: Request, next_url: str, *, error: str | None = None, status: int = 200):
+            response = templates.TemplateResponse(
+                request, "login.html", {"next_url": next_url, "error": error}, status_code=status
+            )
+            return response
+
+        @app.get("/login")
+        def login_form(request: Request):
+            next_url = auth.safe_next(request.query_params.get("next"))
+            if auth.verify_session(request.cookies.get(auth.COOKIE_NAME), password):
+                return RedirectResponse(next_url, status_code=303)
+            return login_page(request, next_url)
+
+        @app.post("/login")
+        async def login_submit(request: Request):
+            check_origin(request)
+            raw = (await request.body()).decode("utf-8", errors="replace")
+            form = {k: v[-1] for k, v in parse_qs(raw).items()}
+            next_url = auth.safe_next(form.get("next"))
+            client = request.client.host if request.client else "?"
+            wait = throttle.blocked(client)
+            if wait > 0:
+                return login_page(
+                    request, next_url, status=429,
+                    error=f"Sai quá nhiều lần, thử lại sau {int(wait) + 1} giây.",
+                )
+            if not auth.check_password(form.get("password", ""), password):
+                throttle.record_failure(client)
+                return login_page(request, next_url, status=401, error="Sai mật khẩu.")
+            throttle.reset(client)
+            response = RedirectResponse(next_url, status_code=303)
+            # Không `Secure`: server chỉ nói HTTP; trình duyệt sẽ bỏ cookie Secure.
+            response.set_cookie(
+                auth.COOKIE_NAME, auth.make_session(password),
+                max_age=auth.SESSION_SECONDS, path="/", httponly=True, samesite="strict",
+            )
+            return response
+
+        @app.post("/logout")
+        def logout(request: Request):
+            check_origin(request)
+            response = RedirectResponse("/login", status_code=303)
+            response.delete_cookie(auth.COOKIE_NAME, path="/", httponly=True, samesite="strict")
+            return response
 
     # ---- trang HTML ------------------------------------------------------
 
@@ -323,11 +398,17 @@ def create_app(
     return app
 
 
-def run(host: str, port: int, workspace: Path, config_path: Path | None) -> None:
+def run(
+    host: str,
+    port: int,
+    workspace: Path,
+    config_path: Path | None,
+    password: str | None = None,
+) -> None:
     """Chạy uvicorn (chặn tới khi Ctrl+C)."""
     import uvicorn
 
     manager = JobManager(workspace, config_path)
-    app = create_app(workspace, manager, allowed_hosts=(host,))
+    app = create_app(workspace, manager, allowed_hosts=(host,), password=password)
     print(f"[web] http://{host}:{port}  (workspace: {workspace})", flush=True)
     uvicorn.run(app, host=host, port=port, log_level="info")
