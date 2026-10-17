@@ -9,10 +9,11 @@
 <body>
   <nav>
     <strong>Dubber</strong>
-    <a href="/jobs">Jobs</a>
-    <a href="/library">Thư viện</a>
+    {% set path = request.url.path %}
+    <a href="/jobs"{% if path.startswith("/jobs") %} aria-current="page"{% endif %}>Jobs</a>
+    <a href="/library"{% if path == "/library" or path.startswith("/ep/") or path.startswith("/pl/") %} aria-current="page"{% endif %}>Thư viện</a>
     {% if auth_enabled %}
-    <form method="post" action="/logout" style="display:inline;margin-left:auto"><button type="submit">Đăng xuất</button></form>
+    <form method="post" action="/logout" class="nav-logout"><button type="submit">Đăng xuất</button></form>
     {% endif %}
   </nav>
   <main>

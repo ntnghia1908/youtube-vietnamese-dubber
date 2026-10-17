@@ -1,89 +1,235 @@
-body { font-family: system-ui, sans-serif; margin: 0; color: #1c1c1c; background: #fafafa; }
-nav { background: #222; padding: .6rem 1rem; display: flex; gap: 1rem; align-items: center; }
-nav a, nav strong { color: #fff; text-decoration: none; }
-main { padding: 1rem 1.5rem; max-width: 1200px; margin: 0 auto; }
-.card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: .8rem 1rem; margin-bottom: 1rem; }
-form.card label { display: inline-block; margin: .3rem 1rem .3rem 0; }
-table { border-collapse: collapse; width: 100%; background: #fff; }
-th, td { border: 1px solid #ddd; padding: .35rem .5rem; text-align: left; vertical-align: top; }
-th { background: #f0f0f0; }
-.url { word-break: break-all; }
-.badge { padding: .1rem .5rem; border-radius: 10px; background: #ddd; font-size: .85em; }
-.st-completed, .st-done { background: #c8efc8; }
-.st-running { background: #ffe9a8; }
-.st-failed { background: #f5b5b5; }
-.st-cancelled, .st-interrupted { background: #ddd; }
-.st-queued, .st-pending { background: #d6e4ff; }
-.stage { text-align: center; }
-.error { color: #b00020; }
-.warn { color: #8a5a00; }
-.log { background: #111; color: #ddd; padding: .8rem; height: 28rem; overflow: auto; white-space: pre-wrap; }
-.err-full { white-space: pre-wrap; margin: 0; color: #b00020; }
-video { width: 100%; max-width: 960px; background: #000; }
+/* WEB-POLISH: giao diện trung tính, một accent. Mọi màu nằm ở token trong :root
+   (và bản dark); phần còn lại chỉ dùng var(--…) để đổi theme ở một chỗ duy nhất. */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --border: #dde1e7;
+  --text: #1d2330;
+  --text-muted: #5b6475;
+  --accent: #2b5fb4;
+  --accent-hover: #234f97;
+  --accent-soft: #e4ecf9;
+  --on-accent: #ffffff;
+  --ok: #1f6b3a;      --ok-bg: #dff2e5;
+  --warn: #8a5a00;    --warn-bg: #fdf0cf;
+  --error: #b3261e;   --error-bg: #fbe3e1;
+  --info: #2b5fb4;    --info-bg: #e4ecf9;
+  --neutral: #4a5263; --neutral-bg: #e6e8ed;
+  --log-bg: #12151c;
+  --log-fg: #d6dae2;
+  --media-bg: #000000;
+  --shadow: 0 1px 2px rgba(20, 28, 45, .06);
+  --focus: rgba(43, 95, 180, .35);
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
+  --radius: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171d;
+    --surface: #1c2028;
+    --surface-2: #252a34;
+    --border: #323846;
+    --text: #e6e9ef;
+    --text-muted: #9aa3b5;
+    --accent: #6c9bea;
+    --accent-hover: #86adf0;
+    --accent-soft: #24324d;
+    --on-accent: #0d1626;
+    --ok: #7fd49a;      --ok-bg: #1d3727;
+    --warn: #e8c068;    --warn-bg: #3b3115;
+    --error: #f2928c;   --error-bg: #432324;
+    --info: #8fb2f0;    --info-bg: #24324d;
+    --neutral: #b4bccb; --neutral-bg: #2d3340;
+    --log-bg: #0b0d12;
+    --log-fg: #d6dae2;
+    --shadow: none;
+    --focus: rgba(108, 155, 234, .45);
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+h1, h2, h3 { line-height: 1.25; margin: 0 0 var(--sp-3); font-weight: 650; letter-spacing: -.01em; }
+h1 { font-size: 1.6rem; margin-top: var(--sp-2); }
+h2 { font-size: 1.2rem; margin-top: var(--sp-6); }
+p { margin: 0 0 var(--sp-3); }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
+code { background: var(--surface-2); padding: 1px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+.muted { color: var(--text-muted); }
+
+/* Thanh điều hướng */
+nav {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 0 var(--sp-6); min-height: 48px;
+  display: flex; gap: var(--sp-1); align-items: center;
+}
+nav strong { margin-right: var(--sp-4); font-size: 1.05rem; letter-spacing: -.01em; }
+nav a { color: var(--text-muted); padding: var(--sp-1) var(--sp-3); border-radius: 6px; }
+nav a:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
+nav a[aria-current="page"] { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+nav .nav-logout { margin: 0 0 0 auto; }
+
+main { padding: var(--sp-4) var(--sp-6) var(--sp-6); max-width: 1200px; margin: 0 auto; }
+
+/* Card + form */
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: var(--sp-4); margin-bottom: var(--sp-4); box-shadow: var(--shadow);
+}
+.card > :last-child { margin-bottom: 0; }
+form.card label { display: inline-block; margin: var(--sp-1) var(--sp-4) var(--sp-2) 0; color: var(--text-muted); font-size: .9rem; }
+form.card label input:not([type="checkbox"]), form.card label select { display: block; margin-top: var(--sp-1); color: var(--text); }
+form.card label:has(> input[type="checkbox"]) { color: var(--text); }
+
+input, select, textarea, button { font: inherit; }
+input:not([type="checkbox"]), select, textarea {
+  max-width: 100%; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus);
+}
+input[type="checkbox"] { accent-color: var(--accent); vertical-align: -2px; margin-right: var(--sp-1); }
+textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9rem; line-height: 1.5; width: 100%; max-width: 100%; }
+
+/* Nút: mặc định là secondary (viền); .btn-primary là hành động chính. Nút submit
+   trong main cũng là primary (form tạo job, đăng nhập, Lưu). */
+button {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 14px; cursor: pointer; line-height: 1.4;
+}
+button:hover:not(:disabled) { background: var(--surface-2); }
+button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.btn-primary, main button[type="submit"] {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600;
+}
+button.btn-primary:hover:not(:disabled),
+main button[type="submit"]:hover:not(:disabled) {
+  background: var(--accent-hover); border-color: var(--accent-hover);
+}
+nav .nav-logout button { background: transparent; border-color: transparent; color: var(--text-muted); }
+nav .nav-logout button:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin: var(--sp-3) 0; }
+.toolbar label { margin: 0 var(--sp-3) 0 0; }
+
+/* Bảng */
+table { border-collapse: collapse; width: 100%; background: var(--surface); border: 1px solid var(--border); }
+th, td { padding: var(--sp-2) var(--sp-3); text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+th { font-size: .78rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); background: var(--surface); white-space: nowrap; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--surface-2); }
+.url { word-break: break-all; color: var(--text-muted); }
+
+/* Badge trạng thái: mỗi status đặt cặp màu --b-fg/--b-bg, badge và ô stage dùng chung. */
+.st-completed, .st-done { --b-fg: var(--ok); --b-bg: var(--ok-bg); }
+.st-running { --b-fg: var(--warn); --b-bg: var(--warn-bg); }
+.st-failed { --b-fg: var(--error); --b-bg: var(--error-bg); }
+.st-cancelled, .st-interrupted { --b-fg: var(--neutral); --b-bg: var(--neutral-bg); }
+.st-queued, .st-pending { --b-fg: var(--info); --b-bg: var(--info-bg); }
+.badge {
+  display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: .8rem; font-weight: 600;
+  color: var(--b-fg, var(--neutral)); background: var(--b-bg, var(--neutral-bg));
+}
+td.stage { text-align: center; color: var(--b-fg, var(--text-muted)); font-weight: 700; }
+.badges { display: flex; flex-wrap: wrap; gap: var(--sp-1); align-items: center; margin-bottom: var(--sp-3); }
+
+.error { color: var(--error); }
+.warn { color: var(--warn); }
+p.error:empty, p.warn:empty { display: none; }
+.err-full { white-space: pre-wrap; margin: 0; color: var(--error); }
+.meta { color: var(--text-muted); font-size: .9rem; }
+.meta strong:not(.warn) { color: var(--text); }
+
+/* Log job */
+.log {
+  background: var(--log-bg); color: var(--log-fg); padding: var(--sp-3) var(--sp-4);
+  height: 28rem; overflow: auto; white-space: pre-wrap; border-radius: var(--radius);
+  font-size: .85rem; line-height: 1.45; margin: 0;
+}
+
+/* Trang đăng nhập (không có nav) */
+body > main > form:not(.card) { display: flex; flex-wrap: wrap; gap: var(--sp-2); max-width: 420px; }
+body > main > form:not(.card) input[name="password"] { flex: 1 1 200px; }
+body > main > [role="alert"] { color: var(--error); background: var(--error-bg); padding: var(--sp-2) var(--sp-3); border-radius: 6px; max-width: 420px; }
+
+/* Player + danh sách câu */
+video { width: 100%; max-width: 960px; background: var(--media-bg); border-radius: var(--radius); display: block; }
+.player > div { margin-top: var(--sp-2); display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 #segments tr[data-start] { cursor: pointer; }
-#segments tr.active { background: #fff3b0; }
-#segments tr[data-status="too_long"] td:nth-child(5) { color: #b00020; font-weight: bold; }
+#segments tr.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+#segments tr[data-status="too_long"] td:nth-child(5) { color: var(--error); font-weight: 600; }
+#segments td:nth-child(2), #segments td:nth-child(6) { white-space: nowrap; }
 
 /* Episode trên màn hình lớn: danh sách câu cuộn TRONG khung riêng, không kéo cả
    trang (scrollIntoView trên window từng đẩy video ra khỏi màn hình khi đang xem). */
 @media (min-width: 641px) {
-  #segments-box { position: relative; max-height: 60vh; overflow: auto; border: 1px solid #ddd; }
-  #segments-box thead th { position: sticky; top: 0; z-index: 1; }
+  #segments-box { position: relative; max-height: 60vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+  #segments-box table { border: none; }
+  #segments-box thead th { position: sticky; top: 0; z-index: 1; border-bottom: 1px solid var(--border); }
 }
 /* Đủ rộng: video bên trái, danh sách câu bên phải. */
 @media (min-width: 1000px) {
   main:has(.episode-layout) { max-width: 1700px; }
-  .episode-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
-  .player-col { position: sticky; top: .5rem; }
+  .episode-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--sp-4); align-items: start; }
+  .player-col { position: sticky; top: var(--sp-2); }
   .segments-pane #segments-box { max-height: calc(100vh - 7rem); }
 }
 
-/* WEB-MOBILE: dùng tốt trên điện thoại. Rule chung ở đây vô hại với desktop;
-   mọi thay đổi bố cục nằm trong media query bên dưới. */
-*, *::before, *::after { box-sizing: border-box; }
-input, select, textarea { max-width: 100%; }
-code { overflow-wrap: anywhere; }
+/* WEB-MOBILE: rule chung ở trên vô hại với desktop; mọi thay đổi bố cục nằm trong
+   media query bên dưới. */
 /* episode.js lọc câu bằng thuộc tính hidden — CSS card hóa (display:block) không được đè. */
 [hidden] { display: none !important; }
 
 @media (max-width: 640px) {
   body { font-size: 16px; }
-  nav { padding: .4rem .75rem; flex-wrap: wrap; }
+  nav { padding: var(--sp-1) var(--sp-3); flex-wrap: wrap; }
   nav a, nav strong, nav button { display: inline-flex; align-items: center; min-height: 44px; }
-  main { padding: .75rem; }
+  main { padding: var(--sp-3); }
   h1 { font-size: 1.35rem; overflow-wrap: anywhere; }
   h2 { font-size: 1.15rem; overflow-wrap: anywhere; }
-  button { min-height: 44px; padding: 0 1rem; }
+  button { min-height: 44px; padding: 0 var(--sp-4); }
 
   /* Form: label xếp dọc, ô nhập rộng hết màn hình; 16px để iOS không tự zoom. */
-  form.card label { display: block; margin: .5rem 0; }
-  form.card label:has(> input[type="checkbox"]) { display: inline-flex; align-items: center; gap: .4rem; margin-right: 1rem; min-height: 44px; }
-  input:not([type="checkbox"]), select, textarea { width: 100%; font-size: 16px; padding: .5rem; }
+  form.card label { display: block; margin: var(--sp-2) 0; }
+  form.card label:has(> input[type="checkbox"]) { display: inline-flex; align-items: center; gap: var(--sp-1); margin-right: var(--sp-4); min-height: 44px; }
+  input:not([type="checkbox"]), select, textarea { width: 100%; font-size: 16px; padding: var(--sp-2); }
   input[type="checkbox"] { width: 1.3rem; height: 1.3rem; }
   textarea#glossary-text { height: 60vh; }
 
   /* Bảng -> thẻ xếp dọc; nhãn cột lấy từ data-label của từng ô. */
   table, thead, tbody, tr, th, td { display: block; }
-  table { background: none; }
+  table { background: none; border: none; }
   thead { display: none; }
-  tbody tr { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: .5rem .75rem; margin-bottom: .6rem; }
-  td { border: none; padding: .15rem 0; }
+  tbody tr { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2); }
+  td { border: none; padding: 2px 0; }
   td:empty { display: none; }
-  td[data-label]::before { content: attr(data-label) ": "; font-weight: 600; color: #555; }
+  td[data-label]::before { content: attr(data-label) ": "; font-weight: 600; color: var(--text-muted); }
   td.title-cell { font-weight: 600; font-size: 1.05em; }
   td.title-cell::before { content: none; }
 
   /* Thư viện: các cột stage thành một hàng badge "tên ✓". */
-  td.stage { display: inline-block; margin: .25rem .25rem 0 0; padding: .1rem .5rem; border-radius: 10px; font-size: .85em; text-align: left; }
+  td.stage { display: inline-block; margin: var(--sp-1) var(--sp-1) 0 0; padding: 1px 10px; border-radius: 999px; font-size: .8rem; text-align: left; background: var(--b-bg, var(--neutral-bg)); }
   td.stage::before { content: attr(title) " "; font-weight: normal; color: inherit; }
 
   /* Episode: video dính đầu màn hình khi cuộn danh sách câu. player-col không
      được tạo khung chứa riêng, nếu không sticky chỉ dính trong khung nhỏ đó. */
   .player-col { display: contents; }
-  .player { position: sticky; top: 0; z-index: 2; background: #fafafa; padding-bottom: .4rem; }
+  .player { position: sticky; top: 0; z-index: 2; background: var(--bg); padding-bottom: var(--sp-1); }
   video { max-height: 35vh; }
   #segments tr { scroll-margin-top: calc(var(--player-h, 0px) + .5rem); }
-  #segments tr.active { background: #fff3b0; }
 
   .log { height: 16rem; font-size: 13px; }
 }

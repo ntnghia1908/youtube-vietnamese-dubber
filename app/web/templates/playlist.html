@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Playlist: {{ pl.title or pl.key }}</h1>
 {% if pl.url %}<p class="url">{{ pl.url }}</p>{% endif %}
-<p>Glossary playlist: <a href="/pl/{{ pl.key | urlencode }}/glossary">{{ "sửa" if gstate.exists else "tạo" }}</a>
+<p class="meta">Glossary playlist: <a href="/pl/{{ pl.key | urlencode }}/glossary">{{ "sửa" if gstate.exists else "tạo" }}</a>
   {% if gstate.stale_items %}— <span class="warn">{{ gstate.stale_items | length }} tập dịch bằng glossary cũ</span>{% endif %}</p>
 <table>
   <thead><tr><th>#</th><th>Tiêu đề</th><th>Status</th><th>Đã tải</th><th>Giây</th><th>Lỗi</th></tr></thead>

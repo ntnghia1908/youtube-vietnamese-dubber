@@ -11,21 +11,21 @@
 </p>
 {% else %}
 <h1>Glossary playlist: <a href="/pl/{{ pl.key | urlencode }}">{{ pl.title or pl.key }}</a></h1>
-<p>Áp dụng cho mọi tập của playlist (gộp với glossary riêng từng tập; glossary tập thắng).</p>
+<p class="meta">Áp dụng cho mọi tập của playlist (gộp với glossary riêng từng tập; glossary tập thắng).</p>
 <p id="stale-label" class="warn">
   {% if gstate.stale_items %}{{ gstate.stale_items | length }}/{{ gstate.translated_items | length }} tập đã dịch bằng glossary cũ (tập {{ gstate.stale_items | join(", ") }}).
   {% else %}Không có tập nào cần dịch lại.{% endif %}
 </p>
 {% endif %}
 {% if gstate.shared_path %}
-  <p>Glossary dùng chung (chỉ đọc, gộp với glossary của tập): <code>{{ gstate.shared_path }}</code></p>
+  <p class="meta">Glossary dùng chung (chỉ đọc, gộp với glossary của tập): <code>{{ gstate.shared_path }}</code></p>
 {% endif %}
 {% if ep and ep.playlist_key and gstate.playlist_path %}
-  <p>Glossary playlist (gộp, sửa ở đây): <a href="/pl/{{ ep.playlist_key | urlencode }}/glossary"><code>{{ gstate.playlist_path }}</code></a></p>
+  <p class="meta">Glossary playlist (gộp, sửa ở đây): <a href="/pl/{{ ep.playlist_key | urlencode }}/glossary"><code>{{ gstate.playlist_path }}</code></a></p>
 {% endif %}
 <p id="state-error" class="error">{{ gstate.error or "" }}</p>
 
-<form id="glossary-form" data-api="{{ api_base }}" data-mode="{{ 'episode' if ep else 'playlist' }}"
+<form id="glossary-form" class="card" data-api="{{ api_base }}" data-mode="{{ 'episode' if ep else 'playlist' }}"
       data-sha="{{ gstate.file_sha256 or '' }}"
       data-has-transcript="{{ '1' if ep and gstate.has_transcript else '' }}">
   <textarea id="glossary-text" rows="28" cols="100" spellcheck="false"
@@ -42,15 +42,15 @@ terms:
   quantum mechanics: cơ học lượng tử
 skip:
   - cụm không dịch">{{ gstate.content }}</textarea>
-  <p>
-    <button type="submit" id="save">Lưu</button>
+  <div class="toolbar">
+    <button type="submit" id="save" class="btn-primary">Lưu</button>
     {% if ep %}
       {% if not gstate.exists and gstate.has_transcript %}<button type="button" id="draft">Tạo nháp bằng model</button>{% endif %}
-      {% if gstate.has_transcript %}<button type="button" id="redub">Dịch lại &amp; chạy tiếp</button>{% endif %}
+      {% if gstate.has_transcript %}<button type="button" id="redub" class="btn-primary">Dịch lại &amp; chạy tiếp</button>{% endif %}
     {% else %}
-      <button type="button" id="redub">Dịch lại các tập cũ</button>
+      <button type="button" id="redub" class="btn-primary">Dịch lại các tập cũ</button>
     {% endif %}
-  </p>
+  </div>
   <p id="msg" class="error"></p>
 </form>
 {% endblock %}

@@ -2,11 +2,11 @@
 {% block title %}{{ ep.title or ep.rel_dir }}{% endblock %}
 {% block content %}
 <h1>{{ ep.title or ep.rel_dir }}</h1>
-<p>{% for s in stages %}<span class="badge st-{{ ep.stages[s] }}">{{ s }}</span> {% endfor %}
-  — too_long: {{ ep.too_long_count if ep.too_long_count is not none else "—" }}
+<div class="badges">{% for s in stages %}<span class="badge st-{{ ep.stages[s] }}">{{ s }}</span>{% endfor %}</div>
+<p class="meta">too_long: {{ ep.too_long_count if ep.too_long_count is not none else "—" }}
   {% if ep.playlist_key %}— <a href="/pl/{{ ep.playlist_key | urlencode }}">về playlist</a>{% endif %}</p>
 
-<p>Glossary: <a href="/ep/{{ ep.key | urlencode }}/glossary">{{ "sửa" if gstate.exists else "tạo" }}</a> —
+<p class="meta">Glossary: <a href="/ep/{{ ep.key | urlencode }}/glossary">{{ "sửa" if gstate.exists else "tạo" }}</a> —
   {% if not gstate.exists and gstate.effective_sha256 is none %}chưa có glossary
   {% elif gstate.stale is none %}chưa có bản dịch
   {% elif gstate.stale %}<strong class="warn">bản dịch CŨ — cần dịch lại</strong>
@@ -30,8 +30,10 @@
 {% if not has_source and not has_output %}<p class="warn">Chưa có video nào.</p>{% endif %}
 </div>
 <div class="segments-pane">
+<div class="toolbar">
 <label><input type="checkbox" id="only-too-long"> Chỉ hiện câu too_long</label>
 <label><input type="checkbox" id="auto-scroll" checked> Tự cuộn theo câu đang phát</label>
+</div>
 <div id="segments-box">
 <table id="segments">
   <thead><tr><th>#</th><th>Thời gian</th><th>Gốc</th><th>Bản dịch</th><th>Status</th><th>Tempo</th></tr></thead>
