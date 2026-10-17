@@ -9,6 +9,15 @@
   });
   if (!video) return;
 
+  // Mobile: player dính đầu màn hình (app.css) — báo chiều cao cho CSS để
+  // scrollIntoView không đẩy câu đang phát xuống dưới video.
+  const player = video.closest(".player");
+  const syncPlayerHeight = () =>
+    document.documentElement.style.setProperty("--player-h", player.offsetHeight + "px");
+  syncPlayerHeight();
+  window.addEventListener("resize", syncPlayerHeight);
+  video.addEventListener("loadedmetadata", syncPlayerHeight);
+
   rows.forEach((r) =>
     r.addEventListener("click", () => {
       video.currentTime = parseFloat(r.dataset.start);

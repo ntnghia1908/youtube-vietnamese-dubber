@@ -24,12 +24,12 @@
   <tbody>
   {% for j in jobs %}
     <tr>
-      <td><a href="/jobs/{{ j.id }}">{{ j.id }}</a></td>
-      <td>{{ j.kind }}</td>
-      <td class="url">{% if j.request.episode_key %}glossary: {{ j.request.episode_key }}{% else %}{{ j.request.url }}{% endif %}</td>
-      <td><span class="badge st-{{ j.status }}">{{ j.status }}</span></td>
-      <td>{{ j.progress | progress }}</td>
-      <td>{{ j.created_at }}</td>
+      <td class="title-cell"><a href="/jobs/{{ j.id }}">{{ j.id }}</a></td>
+      <td data-label="Loại">{{ j.kind }}</td>
+      <td class="url" data-label="URL">{% if j.request.episode_key %}glossary: {{ j.request.episode_key }}{% else %}{{ j.request.url }}{% endif %}</td>
+      <td data-label="Trạng thái"><span class="badge st-{{ j.status }}">{{ j.status }}</span></td>
+      <td data-label="Tiến độ">{{ j.progress | progress }}</td>
+      <td data-label="Tạo lúc">{{ j.created_at }}</td>
     </tr>
   {% else %}
     <tr><td colspan="6">Chưa có job nào. Dán URL ở trên để bắt đầu.</td></tr>

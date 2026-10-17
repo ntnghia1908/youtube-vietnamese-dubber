@@ -23,3 +23,51 @@ video { width: 100%; max-width: 960px; background: #000; }
 #segments tr[data-start] { cursor: pointer; }
 #segments tr.active { background: #fff3b0; }
 #segments tr[data-status="too_long"] td:nth-child(5) { color: #b00020; font-weight: bold; }
+
+/* WEB-MOBILE: dùng tốt trên điện thoại. Rule chung ở đây vô hại với desktop;
+   mọi thay đổi bố cục nằm trong media query bên dưới. */
+*, *::before, *::after { box-sizing: border-box; }
+input, select, textarea { max-width: 100%; }
+code { overflow-wrap: anywhere; }
+/* episode.js lọc câu bằng thuộc tính hidden — CSS card hóa (display:block) không được đè. */
+[hidden] { display: none !important; }
+
+@media (max-width: 640px) {
+  body { font-size: 16px; }
+  nav { padding: .4rem .75rem; flex-wrap: wrap; }
+  nav a, nav strong, nav button { display: inline-flex; align-items: center; min-height: 44px; }
+  main { padding: .75rem; }
+  h1 { font-size: 1.35rem; overflow-wrap: anywhere; }
+  h2 { font-size: 1.15rem; overflow-wrap: anywhere; }
+  button { min-height: 44px; padding: 0 1rem; }
+
+  /* Form: label xếp dọc, ô nhập rộng hết màn hình; 16px để iOS không tự zoom. */
+  form.card label { display: block; margin: .5rem 0; }
+  form.card label:has(> input[type="checkbox"]) { display: inline-flex; align-items: center; gap: .4rem; margin-right: 1rem; min-height: 44px; }
+  input:not([type="checkbox"]), select, textarea { width: 100%; font-size: 16px; padding: .5rem; }
+  input[type="checkbox"] { width: 1.3rem; height: 1.3rem; }
+  textarea#glossary-text { height: 60vh; }
+
+  /* Bảng -> thẻ xếp dọc; nhãn cột lấy từ data-label của từng ô. */
+  table, thead, tbody, tr, th, td { display: block; }
+  table { background: none; }
+  thead { display: none; }
+  tbody tr { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: .5rem .75rem; margin-bottom: .6rem; }
+  td { border: none; padding: .15rem 0; }
+  td:empty { display: none; }
+  td[data-label]::before { content: attr(data-label) ": "; font-weight: 600; color: #555; }
+  td.title-cell { font-weight: 600; font-size: 1.05em; }
+  td.title-cell::before { content: none; }
+
+  /* Thư viện: các cột stage thành một hàng badge "tên ✓". */
+  td.stage { display: inline-block; margin: .25rem .25rem 0 0; padding: .1rem .5rem; border-radius: 10px; font-size: .85em; text-align: left; }
+  td.stage::before { content: attr(title) " "; font-weight: normal; color: inherit; }
+
+  /* Episode: video dính đầu màn hình khi cuộn danh sách câu. */
+  .player { position: sticky; top: 0; z-index: 2; background: #fafafa; padding-bottom: .4rem; }
+  video { max-height: 35vh; }
+  #segments tr { scroll-margin-top: calc(var(--player-h, 0px) + .5rem); }
+  #segments tr.active { background: #fff3b0; }
+
+  .log { height: 16rem; font-size: 13px; }
+}

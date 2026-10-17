@@ -8,12 +8,12 @@
   <tbody>
   {% for e in pl.entries %}
     <tr>
-      <td>{{ e.index }}</td>
-      <td>{% if links.get(e.index) %}<a href="/ep/{{ links[e.index] | urlencode }}">{{ e.title }}</a>{% else %}{{ e.title }}{% endif %}</td>
-      <td><span class="badge st-{{ e.status }}">{{ e.status }}</span></td>
-      <td>{{ "có" if e.downloaded else "chưa" }}</td>
-      <td>{{ e.seconds if e.seconds is not none else "—" }}</td>
-      <td>{% if e.error %}<pre class="err-full">{% if e.error_stage %}[{{ e.error_stage }}] {% endif %}{{ e.error }}</pre>{% endif %}</td>
+      <td data-label="#">{{ e.index }}</td>
+      <td class="title-cell">{% if links.get(e.index) %}<a href="/ep/{{ links[e.index] | urlencode }}">{{ e.title }}</a>{% else %}{{ e.title }}{% endif %}</td>
+      <td data-label="Status"><span class="badge st-{{ e.status }}">{{ e.status }}</span></td>
+      <td data-label="Đã tải">{{ "có" if e.downloaded else "chưa" }}</td>
+      <td data-label="Giây">{{ e.seconds if e.seconds is not none else "—" }}</td>
+      <td data-label="Lỗi">{% if e.error %}<pre class="err-full">{% if e.error_stage %}[{{ e.error_stage }}] {% endif %}{{ e.error }}</pre>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

@@ -33,12 +33,12 @@
   <tbody>
   {% for s in segments %}
     <tr data-start="{{ s.start }}" data-end="{{ s.end }}" data-status="{{ s.status or '' }}">
-      <td>{{ s.id }}</td>
-      <td>{{ s.start | duration }}</td>
-      <td>{{ s.source_text }}</td>
-      <td>{{ s.translated_text or "" }}</td>
-      <td>{{ s.status or "" }}</td>
-      <td>{{ s.tempo if s.tempo is not none else "" }}</td>
+      <td data-label="#">{{ s.id }}</td>
+      <td data-label="Thời gian">{{ s.start | duration }}</td>
+      <td data-label="Gốc">{{ s.source_text }}</td>
+      <td data-label="Dịch">{{ s.translated_text or "" }}</td>
+      <td data-label="Status">{{ s.status or "" }}</td>
+      <td data-label="Tempo">{{ s.tempo if s.tempo is not none else "" }}</td>
     </tr>
   {% else %}
     <tr><td colspan="6">Chưa có transcript.</td></tr>
