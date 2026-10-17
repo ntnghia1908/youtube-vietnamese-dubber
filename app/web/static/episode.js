@@ -1,0 +1,48 @@
+// Trang episode: click câu -> tua, highlight câu đang phát, đổi output/source giữ thời điểm, lọc too_long.
+(function () {
+  const video = document.getElementById("video");
+  const rows = Array.from(document.querySelectorAll("#segments tr[data-start]"));
+  const filter = document.getElementById("only-too-long");
+
+  filter.addEventListener("change", () => {
+    rows.forEach((r) => (r.hidden = filter.checked && r.dataset.status !== "too_long"));
+  });
+  if (!video) return;
+
+  rows.forEach((r) =>
+    r.addEventListener("click", () => {
+      video.currentTime = parseFloat(r.dataset.start);
+      video.play();
+    })
+  );
+
+  let active = null;
+  video.addEventListener("timeupdate", () => {
+    const t = video.currentTime;
+    const cur = rows.find((r) => t >= parseFloat(r.dataset.start) && t < parseFloat(r.dataset.end));
+    if (cur === active) return;
+    if (active) active.classList.remove("active");
+    active = cur || null;
+    if (active) {
+      active.classList.add("active");
+      if (!active.hidden) active.scrollIntoView({ block: "nearest" });
+    }
+  });
+
+  function switchTo(src) {
+    if (!src || video.getAttribute("src") === src) return;
+    const t = video.currentTime;
+    const wasPlaying = !video.paused;
+    video.addEventListener(
+      "loadedmetadata",
+      () => {
+        video.currentTime = t;
+        if (wasPlaying) video.play();
+      },
+      { once: true }
+    );
+    video.src = src;
+  }
+  document.getElementById("use-output").addEventListener("click", () => switchTo(video.dataset.output));
+  document.getElementById("use-source").addEventListener("click", () => switchTo(video.dataset.source));
+})();

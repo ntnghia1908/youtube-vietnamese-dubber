@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Dubber{% endblock %} — YouTube Vietnamese Dubber</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <nav>
+    <strong>Dubber</strong>
+    <a href="/jobs">Jobs</a>
+    <a href="/library">Thư viện</a>
+  </nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

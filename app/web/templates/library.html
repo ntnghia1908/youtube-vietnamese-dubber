@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Thư viện{% endblock %}
+{% block content %}
+<h1>Thư viện</h1>
+{% macro stage_cells(ep) %}
+  {% for s in stages %}<td class="stage st-{{ ep.stages[s] }}" title="{{ s }}">{{ "✓" if ep.stages[s] == "done" else "·" }}</td>{% endfor %}
+  <td>{{ ep.too_long_count if ep.too_long_count is not none else "—" }}</td>
+{% endmacro %}
+{% macro head() %}
+  <tr><th>Tiêu đề</th><th>Thời lượng</th>{% for s in stages %}<th>{{ s }}</th>{% endfor %}<th>too_long</th></tr>
+{% endmacro %}
+
+{% for pl in playlists %}
+  <h2><a href="/pl/{{ pl.key | urlencode }}">Playlist: {{ pl.title or pl.key }}</a></h2>
+  <table>
+    <thead>{{ head() }}</thead>
+    <tbody>
+    {% for ep in pl.episodes %}
+      <tr><td><a href="/ep/{{ ep.key | urlencode }}">{{ ep.title or ep.rel_dir }}</a></td><td>{{ ep.duration_seconds | duration }}</td>{{ stage_cells(ep) }}</tr>
+    {% else %}
+      <tr><td colspan="{{ stages|length + 3 }}">Chưa tải tập nào.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% endfor %}
+
+<h2>Video lẻ</h2>
+<table>
+  <thead>{{ head() }}</thead>
+  <tbody>
+  {% for ep in singles %}
+    <tr><td><a href="/ep/{{ ep.key | urlencode }}">{{ ep.title or ep.rel_dir }}</a></td><td>{{ ep.duration_seconds | duration }}</td>{{ stage_cells(ep) }}</tr>
+  {% else %}
+    <tr><td colspan="{{ stages|length + 3 }}">Không có video lẻ.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

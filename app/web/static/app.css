@@ -1,0 +1,25 @@
+body { font-family: system-ui, sans-serif; margin: 0; color: #1c1c1c; background: #fafafa; }
+nav { background: #222; padding: .6rem 1rem; display: flex; gap: 1rem; align-items: center; }
+nav a, nav strong { color: #fff; text-decoration: none; }
+main { padding: 1rem 1.5rem; max-width: 1200px; margin: 0 auto; }
+.card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: .8rem 1rem; margin-bottom: 1rem; }
+form.card label { display: inline-block; margin: .3rem 1rem .3rem 0; }
+table { border-collapse: collapse; width: 100%; background: #fff; }
+th, td { border: 1px solid #ddd; padding: .35rem .5rem; text-align: left; vertical-align: top; }
+th { background: #f0f0f0; }
+.url { word-break: break-all; }
+.badge { padding: .1rem .5rem; border-radius: 10px; background: #ddd; font-size: .85em; }
+.st-completed, .st-done { background: #c8efc8; }
+.st-running { background: #ffe9a8; }
+.st-failed { background: #f5b5b5; }
+.st-cancelled, .st-interrupted { background: #ddd; }
+.st-queued, .st-pending { background: #d6e4ff; }
+.stage { text-align: center; }
+.error { color: #b00020; }
+.warn { color: #8a5a00; }
+.log { background: #111; color: #ddd; padding: .8rem; height: 28rem; overflow: auto; white-space: pre-wrap; }
+.err-full { white-space: pre-wrap; margin: 0; color: #b00020; }
+video { width: 100%; max-width: 960px; background: #000; }
+#segments tr[data-start] { cursor: pointer; }
+#segments tr.active { background: #fff3b0; }
+#segments tr[data-status="too_long"] td:nth-child(5) { color: #b00020; font-weight: bold; }

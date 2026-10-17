@@ -326,6 +326,31 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    web_parser = subparsers.add_parser(
+        "web",
+        parents=[common],
+        help=(
+            "Mở Web UI local: nhập URL video/playlist, xếp job, xem log/tiến độ, thư viện và "
+            "player (cần `pip install -e \".[web]\"`)."
+        ),
+    )
+    web_parser.add_argument(
+        "--host",
+        default=None,
+        help="Địa chỉ bind (mặc định: `web.host` trong config, hoặc 127.0.0.1).",
+    )
+    web_parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port (mặc định: `web.port` trong config, hoặc 8765).",
+    )
+    web_parser.add_argument(
+        "--workspace",
+        default=None,
+        help="Thư mục gốc chứa các episode (mặc định: `workspace` trong config, hoặc output).",
+    )
+
     return parser
 
 
@@ -895,6 +920,46 @@ def _cmd_playlist(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
+def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
+    from app.config import validate_web_port
+
+    host = args.host if args.host is not None else config.web.host
+    port = args.port if args.port is not None else config.web.port
+    try:
+        validate_web_port(port)
+    except ConfigError as exc:
+        print(f"[config] LỖI: {exc}", file=sys.stderr)
+        return 1
+    workspace = Path(args.workspace) if args.workspace else config.workspace
+
+    # Import fastapi/uvicorn chỉ ở đây: extra `web` là tùy chọn, các lệnh CLI
+    # khác phải chạy được khi chưa cài.
+    try:
+        from app.web.server import run
+    except ImportError as exc:
+        print(
+            f"[web] LỖI: thiếu thư viện Web UI ({exc}). "
+            'Cài bằng: pip install -e ".[web]"',
+            file=sys.stderr,
+        )
+        return 2
+
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            f"[web] CẢNH BÁO: bind {host} — server KHÔNG có xác thực và chạy lệnh theo form; "
+            "bất kỳ ai trong mạng đều điều khiển được máy này.",
+            file=sys.stderr,
+            flush=True,
+        )
+    run(
+        host,
+        port,
+        workspace,
+        Path(args.config) if args.config else None,
+    )
+    return 0
+
+
 _COMMANDS = {
     "download": _cmd_download,
     "transcribe": _cmd_transcribe,
@@ -905,6 +970,7 @@ _COMMANDS = {
     "render": _cmd_render,
     "dub": _cmd_dub,
     "playlist": _cmd_playlist,
+    "web": _cmd_web,
 }
 
 

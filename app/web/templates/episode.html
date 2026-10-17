@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ ep.title or ep.rel_dir }}{% endblock %}
+{% block content %}
+<h1>{{ ep.title or ep.rel_dir }}</h1>
+<p>{% for s in stages %}<span class="badge st-{{ ep.stages[s] }}">{{ s }}</span> {% endfor %}
+  — too_long: {{ ep.too_long_count if ep.too_long_count is not none else "—" }}
+  {% if ep.playlist_key %}— <a href="/pl/{{ ep.playlist_key | urlencode }}">về playlist</a>{% endif %}</p>
+
+{% if has_output or has_source %}
+  <div class="player">
+    <video id="video" controls preload="metadata"
+           data-output="{{ '/media/' ~ (ep.key | urlencode) ~ '/output' if has_output else '' }}"
+           data-source="{{ '/media/' ~ (ep.key | urlencode) ~ '/source' if has_source else '' }}"
+           src="{{ '/media/' ~ (ep.key | urlencode) ~ '/output' if has_output else '/media/' ~ (ep.key | urlencode) ~ '/source' }}"></video>
+    <div>
+      <button type="button" id="use-output" {% if not has_output %}disabled{% endif %}>Bản lồng tiếng</button>
+      <button type="button" id="use-source" {% if not has_source %}disabled{% endif %}>Bản gốc</button>
+    </div>
+  </div>
+{% endif %}
+{% if not has_output %}<p class="warn">Chưa có <code>output_vi.mp4</code>{% if has_source %} — đang hiện bản gốc{% endif %}.</p>{% endif %}
+{% if not has_source and not has_output %}<p class="warn">Chưa có video nào.</p>{% endif %}
+
+<label><input type="checkbox" id="only-too-long"> Chỉ hiện câu too_long</label>
+<table id="segments">
+  <thead><tr><th>#</th><th>Thời gian</th><th>Gốc</th><th>Bản dịch</th><th>Status</th><th>Tempo</th></tr></thead>
+  <tbody>
+  {% for s in segments %}
+    <tr data-start="{{ s.start }}" data-end="{{ s.end }}" data-status="{{ s.status or '' }}">
+      <td>{{ s.id }}</td>
+      <td>{{ s.start | duration }}</td>
+      <td>{{ s.source_text }}</td>
+      <td>{{ s.translated_text or "" }}</td>
+      <td>{{ s.status or "" }}</td>
+      <td>{{ s.tempo if s.tempo is not none else "" }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6">Chưa có transcript.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+{% block scripts %}<script src="/static/episode.js"></script>{% endblock %}

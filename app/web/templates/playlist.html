@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Playlist{% endblock %}
+{% block content %}
+<h1>Playlist: {{ pl.title or pl.key }}</h1>
+{% if pl.url %}<p class="url">{{ pl.url }}</p>{% endif %}
+<table>
+  <thead><tr><th>#</th><th>Tiêu đề</th><th>Status</th><th>Đã tải</th><th>Giây</th><th>Lỗi</th></tr></thead>
+  <tbody>
+  {% for e in pl.entries %}
+    <tr>
+      <td>{{ e.index }}</td>
+      <td>{% if links.get(e.index) %}<a href="/ep/{{ links[e.index] | urlencode }}">{{ e.title }}</a>{% else %}{{ e.title }}{% endif %}</td>
+      <td><span class="badge st-{{ e.status }}">{{ e.status }}</span></td>
+      <td>{{ "có" if e.downloaded else "chưa" }}</td>
+      <td>{{ e.seconds if e.seconds is not none else "—" }}</td>
+      <td>{% if e.error %}<pre class="err-full">{% if e.error_stage %}[{{ e.error_stage }}] {% endif %}{{ e.error }}</pre>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

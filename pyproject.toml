@@ -12,9 +12,21 @@ dependencies = [
     "edge-tts>=7.0",
 ]
 
+[project.optional-dependencies]
+# Web UI local (`python -m app web`) — tùy chọn, các lệnh CLI khác không cần.
+# httpx cho fastapi TestClient trong test.
+web = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "jinja2>=3.1",
+    "httpx>=0.27",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+# Template/static dưới app/web được hatch gồm sẵn (packages = ["app"] lấy mọi
+# file trong package, không chỉ .py) — không khai thêm `include` kẻo vô tình lọc mất.

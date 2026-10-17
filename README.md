@@ -192,6 +192,28 @@ sẽ **không làm lại** các bước đã có output (`source.mp4`, `audio.wa
 trừ khi dùng `--force` (hỗ trợ resume) — quan trọng với playlist nhiều tập
 chạy hàng giờ.
 
+## Web UI (local)
+
+Giao diện web chạy trên máy bạn để dán URL video/playlist YouTube, xem tiến độ
+và nghe/xem kết quả — chạy đúng lệnh CLI `dub`/`playlist` ở tiến trình con.
+
+```bash
+pip install -e ".[web]"          # extra tùy chọn: fastapi, uvicorn, jinja2, httpx
+python -m app web --workspace output   # mở http://127.0.0.1:8765
+```
+
+- **Jobs** (`/jobs`): dán URL (video hoặc playlist), chọn ngôn ngữ gốc, `--items`,
+  `--force`, `--download-only`; xem log trực tiếp, hủy, chạy lại (chạy lại sẽ SKIP
+  stage đã xong).
+- **Thư viện** (`/library`): trạng thái 6 stage từng tập, số câu `too_long`.
+- **Episode** (`/ep/...`): player `output_vi.mp4`/`source.mp4` (chuyển giữ thời điểm),
+  bảng câu dịch click-để-tua, lọc `too_long`.
+- Cấu hình: section `web` (`host`, `port`) trong `config.yaml`, hoặc `--host`/`--port`.
+- Giới hạn: một job chạy một lúc (hàng đợi FIFO); **không có xác thực**, mặc định
+  chỉ bind `127.0.0.1` — đừng mở ra mạng. Tắt server giữa chừng thì job đang chạy
+  thành `interrupted` (tiến trình pipeline con có thể còn chạy nốt, xem
+  `docs/decisions/WEB-1.md`).
+
 ## Chạy test
 
 ```bash

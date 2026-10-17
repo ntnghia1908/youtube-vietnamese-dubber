@@ -2,7 +2,7 @@
 
 ## Status / Approval
 
-- Status: DRAFT
+- Status: READY
 - Type: FEATURE
 - Change class: S2
 - Owner: HUMAN LEAD
@@ -13,7 +13,7 @@
 - Parallel group: —
 - Owned paths: app/web/**, app/cli.py, app/config.py, config.example.yaml, pyproject.toml, tests/test_web_*.py, README.md, docs/decisions/WEB-1.md
 - Dependencies: ADR-001 ACCEPTED; `.venv` (đã có); Ollama có model dịch cho phần chạy thật trọn pipeline (xem Required verification)
-- Base commit / branch: điền SHA khi `/implement` / main
+- Base commit / branch: a1a6f13 / main
 - Human Lead approval: inherited from boundary
 - Implementation authorized: YES
 
@@ -210,9 +210,10 @@ Không chạm database hay public API. Chạm security model ở mức "server H
 
 ## Result
 
-- Main changes:
-- Tests:
-- Review:
-- Important findings / decisions:
-- Known limitations:
-- PR:
+- Main changes: subcommand `web` + section config `web` + extra `web` (`pyproject.toml`); `app/web/` gồm `library.py` (quét workspace, stdlib), `jobs.py` (JobManager: FIFO 1 worker, subprocess CLI, log + tiến độ, hủy, chạy lại, recovery kể cả dọn pipeline mồ côi), `server.py` (FastAPI, SSE, media Range, kiểm Origin + Host), 6 template + 4 file JS/CSS; README mục "Web UI (local)"; decision log `docs/decisions/WEB-1.md`.
+- Tests: 484 test OK (437 cũ + 47 mới: `tests/test_web_{library,jobs,server,cli_config}.py`), ORCHESTRATOR chạy lại độc lập.
+- Chạy thật: video thật `fcfQkxwz4Oo` (82 s, en) qua `POST /api/jobs`, Ollama 127.0.0.1:11437 `qwen3:14b` → `completed`; `ffprobe output_vi.mp4` có vp9 + aac (81.6 s), 15 segment, 6 `too_long`; SSE thấy log tới `6/6 render`; FIFO (job 2 `queued` khi job 1 chạy); hủy → `cancelled`, không còn tiến trình; chạy lại → SKIP; kill -9 server rồi bật lại → job `interrupted`, tiến trình mồ côi bị dừng, job queued chạy một mình; Range 206; traversal 404; Origin lạ 403; Host lạ 400; chỉ bind 127.0.0.1.
+- Review: vòng 1 có 2 blocking. B1: kill -9 server để lại pipeline mồ côi chạy song song với job kế (AC6) → ghi `pid`, dọn khi khởi động lại. B2: chưa kiểm Host header (DNS rebinding đọc được GET) → middleware. Đã sửa, ORCHESTRATOR kiểm lại. ACCEPTED.
+- Important findings / decisions: `av` 19 không chạy với faster-whisper 1.2.1 → tách thành `fix(deps)` ghim `av>=14,<17` (HUMAN LEAD duyệt 2026-10-17). Field `pid` thêm vào job JSON. Form parse bằng `parse_qs` để không cần `python-multipart`.
+- Known limitations: chưa chạy thật job `playlist` (chỉ unit test); chưa kiểm tương tác JS bằng trình duyệt thật (click câu để tua, chuyển output/source, lọc) → Manual test checklist; chất lượng dịch `qwen3:14b` chưa đánh giá; đo thời gian quét workspace mới với 1 episode.
+- PR: commit thẳng `main` (profile §5).

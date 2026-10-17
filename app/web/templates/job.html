@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.id }}{% endblock %}
+{% block content %}
+<h1>Job <code>{{ job.id }}</code></h1>
+<div class="card" id="job" data-job-id="{{ job.id }}" data-status="{{ job.status }}">
+  <p>Loại: <strong>{{ job.kind }}</strong> — trạng thái: <span id="status" class="badge st-{{ job.status }}">{{ job.status }}</span>
+     — exit code: <span id="exit-code">{{ job.exit_code if job.exit_code is not none else "—" }}</span></p>
+  <p>Tiến độ: <span id="progress">{{ job.progress | progress }}</span></p>
+  <p>URL: <span class="url">{{ job.request.url }}</span></p>
+  <p>Lệnh: <code>{{ job.command | join(" ") }}</code></p>
+  {% if job.retry_of %}<p>Chạy lại từ <a href="/jobs/{{ job.retry_of }}">{{ job.retry_of }}</a></p>{% endif %}
+  <button id="cancel" type="button">Hủy</button>
+  <button id="retry" type="button">Chạy lại</button>
+  <p id="action-error" class="error"></p>
+</div>
+<h2>Log</h2>
+<pre id="log" class="log"></pre>
+{% endblock %}
+{% block scripts %}<script src="/static/job.js"></script>{% endblock %}

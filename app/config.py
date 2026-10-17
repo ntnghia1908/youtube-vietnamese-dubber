@@ -6,7 +6,7 @@ chỉ là config, không hard-code trong source) — thiếu thì báo lỗi rõ
 lúc tạo translator.
 
 Chỉ khai báo các section đã có code đọc (``whisper``, ``translation``,
-``tts``, ``timing``, ``mixing``).
+``tts``, ``timing``, ``mixing``, ``pipeline``, ``web``).
 Key lạ bị từ chối thay vì bỏ qua: gõ nhầm ``batchsize`` mà lặng lẽ dùng
 mặc định thì rất khó phát hiện khi playlist đã chạy vài giờ.
 """
@@ -94,6 +94,14 @@ class MixingConfig:
 
 
 @dataclass(frozen=True)
+class WebConfig:
+    # Chỉ bind localhost: server không có auth và chạy subprocess theo input
+    # form (ADR-001 D1). Mở ra LAN là quyết định riêng, không phải mặc định.
+    host: str = "127.0.0.1"
+    port: int = 8765
+
+
+@dataclass(frozen=True)
 class AppConfig:
     workspace: Path = Path("output")
     target_language: str = "vi"
@@ -103,6 +111,7 @@ class AppConfig:
     timing: TimingConfig = field(default_factory=TimingConfig)
     mixing: MixingConfig = field(default_factory=MixingConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    web: WebConfig = field(default_factory=WebConfig)
 
 
 # Kiểu hợp lệ cho từng key. ``None`` trong tuple = cho phép giá trị null.
@@ -148,6 +157,10 @@ _MIXING_TYPES: dict[str, tuple[type | None, ...]] = {
 _PIPELINE_TYPES: dict[str, tuple[type | None, ...]] = {
     "repair_rounds": (int,),
     "max_consecutive_failures": (int,),
+}
+_WEB_TYPES: dict[str, tuple[type | None, ...]] = {
+    "host": (str,),
+    "port": (int,),
 }
 # vd "+0%", "-10%", "+100%". YAML `rate: +0%` không quote vẫn parse ra str,
 # nhưng thiếu dấu % (`rate: 0%` thành số 0 hoặc thiếu dấu +/-) là lỗi hay gặp.
@@ -208,6 +221,12 @@ def validate_mixing(
         )
 
 
+def validate_web_port(port: int) -> None:
+    """Port hợp lệ 1–65535. Dùng chung cho ``config.yaml`` và flag ``--port``."""
+    if not 1 <= port <= 65535:
+        raise ConfigError(f"`web.port` phải trong khoảng 1–65535 (đang là {port}).")
+
+
 def _check_section(
     data: Any, section: str, types: dict[str, tuple[type | None, ...]]
 ) -> dict[str, Any]:
@@ -258,6 +277,7 @@ def parse_config(data: Any) -> AppConfig:
         "timing",
         "mixing",
         "pipeline",
+        "web",
     }
     unknown = sorted(set(data) - top_level)
     if unknown:
@@ -325,6 +345,12 @@ def parse_config(data: Any) -> AppConfig:
             f"{pipeline.max_consecutive_failures})."
         )
     kwargs["pipeline"] = pipeline
+
+    web = WebConfig(**_check_section(data.get("web"), "web", _WEB_TYPES))
+    validate_web_port(web.port)
+    if not web.host.strip():
+        raise ConfigError("`web.host` không được để trống.")
+    kwargs["web"] = web
 
     return AppConfig(**kwargs)
 
