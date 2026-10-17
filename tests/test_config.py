@@ -324,6 +324,16 @@ class TestParallelConfig(unittest.TestCase):
             with self.subTest(v=v), self.assertRaises(ConfigError):
                 parse_config({"web": {"max_jobs": v}})
 
+    def test_episode_workers(self) -> None:
+        self.assertEqual(AppConfig().pipeline.episode_workers, "auto")
+        for v in (1, 2, "auto"):
+            self.assertEqual(
+                parse_config({"pipeline": {"episode_workers": v}}).pipeline.episode_workers, v
+            )
+        for v in (0, 3, "2", "max", True, None):
+            with self.subTest(v=v), self.assertRaises(ConfigError):
+                parse_config({"pipeline": {"episode_workers": v}})
+
     def test_invalid_cpu_threads(self) -> None:
         for v in (-1, True, "12", "max", 1.5):
             with self.subTest(v=v), self.assertRaises(ConfigError):

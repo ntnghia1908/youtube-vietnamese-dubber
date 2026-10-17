@@ -1,15 +1,18 @@
-"""Stage: chạy ``run_dub`` tuần tự cho mọi tập của một playlist — Checkpoint 8.
+"""Stage: chạy ``run_dub`` cho mọi tập của một playlist — Checkpoint 8, CP9-C.
 
-Xử lý (transcribe/translate/tts/render) vẫn tuần tự, KHÔNG song song nhiều
-tập (plan §19: MVP tuần tự). SỬA ĐỔI 1 (yêu cầu giữa chừng của user): việc
-*tải* video được tách ra một luồng riêng (``threading.Thread``, daemon),
-chạy song song với luồng xử lý — tập N+1 được tải trong lúc tập N đang
-transcribe/translate/tts/render, để không phí thời gian chờ mạng giữa hai
-tập. Luồng chính chỉ chờ đúng lúc cần: trước khi gọi ``run_dub`` cho tập
-nào, nó chờ (``threading.Event``) tới khi tập đó tải xong.
+Mặc định xử lý (transcribe/translate/tts/render) tuần tự từng tập. CP9-C
+(``PlaylistOptions.episode_workers`` = 2) cho phép tối đa 2 tập xử lý CÙNG LÚC
+trên 2 luồng worker (thay giới hạn "tuần tự" của CP8), để hai tập chồng thời
+gian — nhất là bước dịch khi Ollama đặt ``OLLAMA_NUM_PARALLEL=2``. Song song
+trong MỘT tập thì không (các batch dịch phụ thuộc ngữ cảnh batch trước).
+SỬA ĐỔI 1 (yêu cầu giữa chừng của user): việc *tải* video được tách ra một
+luồng riêng (``threading.Thread``, daemon), tuần tự và đi trước — tập N+1
+được tải trong lúc tập N đang xử lý, để không phí thời gian chờ mạng. Worker
+chỉ chờ đúng lúc cần: trước khi gọi ``run_dub`` cho tập nào, nó chờ
+(``threading.Event``) tới khi tập đó tải xong.
 
 Trạng thái từng tập được ghi vào ``playlist.json`` **sau mỗi tập** (atomic,
-qua một ``threading.Lock`` dùng chung cho cả hai luồng) để resume: một tập
+qua ``threading.Lock`` dùng chung cho mọi luồng) để resume: một tập
 lỗi (tải lỗi hoặc ``DubError``) không chặn cả playlist (cùng tinh thần C3
 của CP3), Ctrl+C giữa tập chỉ mất đúng tập đang chạy dở — xem
 docs/decisions/checkpoint-8.md mục A.
@@ -25,6 +28,7 @@ import json
 import os
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -89,6 +93,8 @@ class PlaylistOptions:
     recheck: bool = False
     max_consecutive_failures: int = 3  # 0 = không bao giờ dừng sớm
     download_only: bool = False  # SỬA ĐỔI 1: chỉ tải, không xử lý
+    # CP9-C: số tập xử lý đồng thời. 1 = tuần tự như cũ; trần MAX_WEB_JOBS.
+    episode_workers: int = 1
 
 
 @dataclass
@@ -310,7 +316,11 @@ def run_playlist(
     *,
     log: Callable[[str], None] = print,
 ) -> PlaylistResult:
-    """Fetch playlist rồi gọi ``run_dub`` tuần tự cho từng tập được chọn.
+    """Fetch playlist rồi gọi ``run_dub`` cho từng tập được chọn.
+
+    ``options.episode_workers`` = 1: tuần tự trên luồng gọi; = 2: pool 2 luồng
+    lấy tập theo thứ tự index (``episodes`` của kết quả luôn sắp theo index).
+    Khi ``aborted``, tập đang chạy dở được chạy hết, tập chưa nhận -> ``not_run``.
 
     Luôn fetch lại playlist (tập mới thêm được nhận), merge với
     ``playlist.json`` cũ theo ``video_id``, ghi lại ngay (trước khi chạy
@@ -445,10 +455,14 @@ def run_playlist(
     episodes: list[EpisodeOutcome] = []
     aborted = False
     consecutive_failures = 0
+    # Bảo vệ aborted/consecutive_failures/episodes khi nhiều worker (CP9-C).
+    # Khoá lá: không lấy khoá nào khác khi đang giữ nó.
+    result_lock = threading.Lock()
+    stop_workers = threading.Event()  # Ctrl+C hoặc lỗi lạ: không nhận tập mới
 
     def _register_failure(
         entry: dict[str, Any], ep_tag: str, stage: str, error_message: str, seconds: float
-    ) -> None:
+    ) -> EpisodeOutcome:
         nonlocal aborted, consecutive_failures
         with entries_lock:
             entry["status"] = "failed"
@@ -460,11 +474,9 @@ def run_playlist(
             entry["updated_at"] = _now_iso()
             _persist_entry(state_path, state, entry)
         log(f"[{ep_tag}] LỖI ở stage {stage} — tiếp tục tập sau")
-        episodes.append(
-            EpisodeOutcome(
-                index=entry["index"], video_id=entry["video_id"], title=entry["title"],
-                outcome="failed", error_stage=stage, error=error_message,
-            )
+        outcome = EpisodeOutcome(
+            index=entry["index"], video_id=entry["video_id"], title=entry["title"],
+            outcome="failed", error_stage=stage, error=error_message,
         )
         # Lỗi tải KHÔNG tính vào (cũng không reset) bộ đếm lỗi liên tiếp: nó
         # chỉ tốn vài giây, còn bộ đếm để chặn lỗi hệ thống (Ollama tắt...)
@@ -472,103 +484,125 @@ def run_playlist(
         # (EP13–21) — tính vào thì chạy cả playlist sẽ dừng ở EP15, không bao
         # giờ tới EP22.
         if stage == "download":
-            return
-        consecutive_failures += 1
-        if options.max_consecutive_failures > 0 and consecutive_failures >= options.max_consecutive_failures:
+            return outcome
+        with result_lock:
+            consecutive_failures += 1
+            just_aborted = (
+                options.max_consecutive_failures > 0
+                and consecutive_failures >= options.max_consecutive_failures
+                and not aborted
+            )
+            if just_aborted:
+                aborted = True
+            count = consecutive_failures
+        if just_aborted:
             log(
-                f"[playlist] {consecutive_failures} tập lỗi liên tiếp — dừng "
+                f"[playlist] {count} tập lỗi liên tiếp — dừng "
                 "(kiểm tra Ollama/mạng/ffmpeg rồi chạy lại)"
             )
-            aborted = True
             stop_download.set()
+        return outcome
+
+    def _reset_failures() -> None:
+        nonlocal consecutive_failures
+        with result_lock:
+            consecutive_failures = 0
+
+    def _process_one(idx: int) -> EpisodeOutcome:
+        """Xử lý đúng một tập — thân vòng lặp tuần tự cũ, dùng chung cho cả hai đường chạy."""
+        entry = by_index[idx]
+        ep_tag = f"EP{idx:0{width}d}"
+
+        def _plain(outcome: str) -> EpisodeOutcome:
+            return EpisodeOutcome(
+                index=idx, video_id=entry["video_id"], title=entry["title"], outcome=outcome
+            )
+
+        with result_lock:
+            is_aborted = aborted
+        if is_aborted:
+            return _plain("not_run")
+
+        if skip_flags[idx]:
+            return _plain("skipped")
+
+        log(f"[{ep_tag}/{total}] {entry['title']} ...")
+
+        # Chờ theo nhịp 0.5s thay vì wait() không timeout: Ctrl+C luôn ngắt
+        # được ngay, kể cả trên Windows. Luồng tải đã chết mà event chưa set =
+        # nó dừng sớm (aborted) trước khi tới tập này -> not_run, không chờ mãi
+        # (chỉ xảy ra khi có nhiều worker: worker khác làm aborted giữa chừng).
+        while not download_events[idx].wait(0.5):
+            if (
+                download_thread is not None
+                and not download_thread.is_alive()
+                and not download_events[idx].is_set()
+            ):
+                return _plain("not_run")
+        download_outcome = download_outcomes[idx]
+
+        if isinstance(download_outcome, VideoDownloadError):
+            return _register_failure(
+                entry, ep_tag, "download", f"[download] {download_outcome}",
+                download_seconds.get(idx, 0.0),
+            )
+        if isinstance(download_outcome, BaseException):
+            # Lỗi lạ ở luồng tải = bug, phải nổi lên (hành vi #8) thay vì
+            # bị ghi thành "failed" như một video tải hỏng.
+            raise download_outcome
+
+        episode_info = download_outcome
+
+        if options.download_only:
+            _reset_failures()
+            return _plain("downloaded")
+
+        def _ep_log(message: str, tag: str = ep_tag) -> None:
+            log(f"[{tag}] {message}")
+
+        dub_options = replace(options.dub, workspace=playlist_dir)
+        started = time.monotonic()
+        try:
+            result = run_dub(entry["url"], config, dub_options, log=_ep_log, episode=episode_info)
+        except DubError as exc:
+            elapsed = download_seconds.get(idx, 0.0) + (time.monotonic() - started)
+            return _register_failure(entry, ep_tag, exc.stage, str(exc), elapsed)
+
+        # Thành công: reset bộ đếm lỗi liên tiếp (#11 — chỉ completed mới reset).
+        _reset_failures()
+        with entries_lock:
+            entry["status"] = "completed"
+            entry["episode_dir"] = _relative_posix(result.episode_dir, playlist_dir)
+            entry["output_path"] = _relative_posix(result.output_path, playlist_dir)
+            entry["error_stage"] = None
+            entry["error"] = None
+            entry["warnings"] = {
+                "translate_failed_ids": list(result.translate_failed_ids),
+                "missing_ids": list(result.missing_ids),
+                "too_long_ids": list(result.too_long_ids),
+            }
+            entry["seconds"] = round(
+                download_seconds.get(idx, 0.0) + sum(result.stage_seconds.values()), 1
+            )
+            entry["updated_at"] = _now_iso()
+            _persist_entry(state_path, state, entry)
+        return EpisodeOutcome(
+            index=idx, video_id=entry["video_id"], title=entry["title"],
+            outcome="completed", result=result,
+        )
 
     try:
-        for idx in selected_indexes:
-            entry = by_index[idx]
-            ep_tag = f"EP{idx:0{width}d}"
-
-            if aborted:
-                episodes.append(
-                    EpisodeOutcome(
-                        index=idx, video_id=entry["video_id"], title=entry["title"], outcome="not_run"
-                    )
-                )
-                continue
-
-            if skip_flags[idx]:
-                episodes.append(
-                    EpisodeOutcome(
-                        index=idx, video_id=entry["video_id"], title=entry["title"], outcome="skipped"
-                    )
-                )
-                continue
-
-            log(f"[{ep_tag}/{total}] {entry['title']} ...")
-
-            # Chờ theo nhịp 0.5s thay vì wait() không timeout: Ctrl+C luôn ngắt
-            # được ngay, kể cả trên Windows.
-            while not download_events[idx].wait(0.5):
-                pass
-            download_outcome = download_outcomes[idx]
-
-            if isinstance(download_outcome, VideoDownloadError):
-                _register_failure(
-                    entry, ep_tag, "download", f"[download] {download_outcome}",
-                    download_seconds.get(idx, 0.0),
-                )
-                continue
-            if isinstance(download_outcome, BaseException):
-                # Lỗi lạ ở luồng tải = bug, phải nổi lên (hành vi #8) thay vì
-                # bị ghi thành "failed" như một video tải hỏng.
-                raise download_outcome
-
-            episode_info = download_outcome
-
-            if options.download_only:
-                consecutive_failures = 0
-                episodes.append(
-                    EpisodeOutcome(
-                        index=idx, video_id=entry["video_id"], title=entry["title"], outcome="downloaded"
-                    )
-                )
-                continue
-
-            def _ep_log(message: str, tag: str = ep_tag) -> None:
-                log(f"[{tag}] {message}")
-
-            dub_options = replace(options.dub, workspace=playlist_dir)
-            started = time.monotonic()
-            try:
-                result = run_dub(entry["url"], config, dub_options, log=_ep_log, episode=episode_info)
-            except DubError as exc:
-                elapsed = download_seconds.get(idx, 0.0) + (time.monotonic() - started)
-                _register_failure(entry, ep_tag, exc.stage, str(exc), elapsed)
-                continue
-
-            # Thành công: reset bộ đếm lỗi liên tiếp (#11 — chỉ completed mới reset).
-            consecutive_failures = 0
-            with entries_lock:
-                entry["status"] = "completed"
-                entry["episode_dir"] = _relative_posix(result.episode_dir, playlist_dir)
-                entry["output_path"] = _relative_posix(result.output_path, playlist_dir)
-                entry["error_stage"] = None
-                entry["error"] = None
-                entry["warnings"] = {
-                    "translate_failed_ids": list(result.translate_failed_ids),
-                    "missing_ids": list(result.missing_ids),
-                    "too_long_ids": list(result.too_long_ids),
-                }
-                entry["seconds"] = round(
-                    download_seconds.get(idx, 0.0) + sum(result.stage_seconds.values()), 1
-                )
-                entry["updated_at"] = _now_iso()
-                _persist_entry(state_path, state, entry)
-            episodes.append(
-                EpisodeOutcome(
-                    index=idx, video_id=entry["video_id"], title=entry["title"],
-                    outcome="completed", result=result,
-                )
+        if options.episode_workers <= 1:
+            for idx in selected_indexes:
+                episodes.append(_process_one(idx))
+        else:
+            _run_pool(
+                selected_indexes, options.episode_workers, _process_one, episodes,
+                result_lock, stop_workers,
             )
+    except BaseException:
+        stop_workers.set()
+        raise
     finally:
         # Dừng sớm/Ctrl+C: báo luồng tải dừng sau tập đang tải, KHÔNG join vô
         # hạn (daemon thread — timeout chỉ để tránh log dở dang, không phải
@@ -577,6 +611,7 @@ def run_playlist(
         if download_thread is not None:
             download_thread.join(timeout=_DOWNLOAD_JOIN_TIMEOUT_SECONDS)
 
+    episodes.sort(key=lambda e: e.index)
     return PlaylistResult(
         playlist_dir=playlist_dir,
         total=total,
@@ -584,3 +619,50 @@ def run_playlist(
         episodes=episodes,
         aborted=aborted,
     )
+
+
+def _run_pool(
+    selected_indexes: list[int],
+    workers: int,
+    process_one: Callable[[int], EpisodeOutcome],
+    episodes: list[EpisodeOutcome],
+    result_lock: threading.Lock,
+    stop_workers: threading.Event,
+) -> None:
+    """Chạy ``process_one`` cho từng idx trên ``workers`` luồng (CP9-C).
+
+    Mỗi idx được lấy đúng một lần theo thứ tự ``selected_indexes``. Lỗi không
+    phải ``DubError`` (bug) được giữ lại, dừng nhận tập mới và raise lại ở
+    luồng gọi sau khi các worker khác chạy nốt tập đang dở — không nuốt lỗi.
+    """
+    pending = deque(selected_indexes)
+    queue_lock = threading.Lock()
+    fatal: list[BaseException] = []
+
+    def _worker() -> None:
+        while not stop_workers.is_set() and not fatal:
+            with queue_lock:
+                if not pending:
+                    return
+                idx = pending.popleft()
+            try:
+                outcome = process_one(idx)
+            except BaseException as exc:  # noqa: BLE001 — raise lại ở luồng gọi
+                fatal.append(exc)
+                return
+            with result_lock:
+                episodes.append(outcome)
+
+    threads = [threading.Thread(target=_worker, daemon=True) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    try:
+        # join(timeout) lặp lại thay vì join() trần: Ctrl+C luôn ngắt được ngay.
+        for thread in threads:
+            while thread.is_alive():
+                thread.join(timeout=0.5)
+    except BaseException:
+        stop_workers.set()
+        raise
+    if fatal:
+        raise fatal[0]

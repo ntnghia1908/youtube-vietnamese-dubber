@@ -621,3 +621,91 @@ class TestMultiWriter(PlaylistTestCase):
         entries = self._read_state(result)["entries"]
         self.assertEqual([e["status"] for e in entries], ["completed", "completed", "completed"])
         self.assertEqual(entries[2]["episode_dir"], "other_dir")
+
+
+class TestEpisodeWorkers(PlaylistTestCase):
+    """CP9-C: episode_workers=2 chạy hai tập chồng thời gian."""
+
+    def _opts(self, **kw) -> PlaylistOptions:
+        return PlaylistOptions(dub=self.dub_options, episode_workers=2, **kw)
+
+    def test_two_episodes_really_run_concurrently(self) -> None:
+        barrier = threading.Barrier(2, timeout=5)
+        calls: list[str] = []
+
+        def run_dub(url, config, options, *, log, episode=None):
+            calls.append(url)
+            barrier.wait()  # chỉ qua được nếu hai run_dub cùng chạy
+            return _success_run_dub()(url, config, options, log=log, episode=episode)
+
+        mocks = self._patch(run_dub_mock=MagicMock(side_effect=run_dub), playlist_info=_playlist_info(n=2))
+        result = self._run(self._opts())
+
+        self.assertEqual(mocks.run_dub.call_count, 2)
+        self.assertEqual(sorted(calls), ["https://youtu.be/vid001", "https://youtu.be/vid002"])
+        self.assertEqual([e.index for e in result.episodes], [1, 2])
+        self.assertEqual([e.outcome for e in result.episodes], ["completed", "completed"])
+        entries = self._read_state(result)["entries"]
+        self.assertEqual([e["status"] for e in entries], ["completed", "completed"])
+
+    def test_episodes_sorted_by_index_and_each_called_once(self) -> None:
+        def run_dub(url, config, options, *, log, episode=None):
+            if url.endswith("vid001"):
+                import time
+
+                time.sleep(0.3)  # tập 1 xong sau tập 2, 3
+            return _success_run_dub()(url, config, options, log=log, episode=episode)
+
+        mocks = self._patch(run_dub_mock=MagicMock(side_effect=run_dub), playlist_info=_playlist_info(n=4))
+        result = self._run(self._opts())
+
+        self.assertEqual([e.index for e in result.episodes], [1, 2, 3, 4])
+        urls = sorted(c.args[0] for c in mocks.run_dub.call_args_list)
+        self.assertEqual(urls, [f"https://youtu.be/vid{i:03d}" for i in range(1, 5)])
+        self.assertEqual(
+            [e["status"] for e in self._read_state(result)["entries"]], ["completed"] * 4
+        )
+
+    def test_failure_does_not_block_other_and_abort_marks_not_run(self) -> None:
+        def run_dub(url, config, options, *, log, episode=None):
+            raise DubError("translate", "boom")
+
+        mocks = self._patch(run_dub_mock=MagicMock(side_effect=run_dub), playlist_info=_playlist_info(n=5))
+        result = self._run(self._opts(max_consecutive_failures=1))
+
+        self.assertTrue(result.aborted)
+        outcomes = [e.outcome for e in result.episodes]
+        self.assertEqual(len(outcomes), 5)
+        self.assertEqual(outcomes.count("failed"), mocks.run_dub.call_count)
+        self.assertGreaterEqual(outcomes.count("not_run"), 1)
+        self.assertEqual([e.index for e in result.episodes], [1, 2, 3, 4, 5])
+
+    def test_one_failure_other_completes(self) -> None:
+        def run_dub(url, config, options, *, log, episode=None):
+            if url.endswith("vid001"):
+                raise DubError("tts", "boom")
+            return _success_run_dub()(url, config, options, log=log, episode=episode)
+
+        self._patch(run_dub_mock=MagicMock(side_effect=run_dub), playlist_info=_playlist_info(n=2))
+        result = self._run(self._opts())
+        self.assertEqual([e.outcome for e in result.episodes], ["failed", "completed"])
+        self.assertFalse(result.aborted)
+
+    def test_unexpected_exception_is_reraised(self) -> None:
+        def run_dub(url, config, options, *, log, episode=None):
+            raise RuntimeError("bug")
+
+        self._patch(run_dub_mock=MagicMock(side_effect=run_dub), playlist_info=_playlist_info(n=2))
+        with self.assertRaises(RuntimeError):
+            self._run(self._opts())
+
+    def test_workers_one_has_no_parallel_thread(self) -> None:
+        names: list[str] = []
+
+        def run_dub(url, config, options, *, log, episode=None):
+            names.append(threading.current_thread().name)
+            return _success_run_dub()(url, config, options, log=log, episode=episode)
+
+        self._patch(run_dub_mock=MagicMock(side_effect=run_dub))
+        self._run(PlaylistOptions(dub=self.dub_options, episode_workers=1))
+        self.assertEqual(set(names), {threading.current_thread().name})

@@ -30,6 +30,20 @@ class TestResolve(unittest.TestCase):
                 self.assertEqual(got, jobs)
                 self.assertEqual(hardware.resolve_whisper_cpu_threads("auto", cpus=cpus), threads)
 
+    def test_episode_workers_same_rule_as_max_jobs(self) -> None:
+        for cpus, device, cuda, want in [
+            (32, "cpu", 0, 2), (8, "auto", 0, 2), (4, "auto", 0, 1),
+            (32, "auto", 1, 1), (32, "cuda", 0, 1),
+        ]:
+            with self.subTest(cpus=cpus, device=device, cuda=cuda):
+                got, _ = hardware.resolve_episode_workers(
+                    "auto", whisper_device=device, cpus=cpus, cuda_devices=cuda
+                )
+                self.assertEqual(got, want)
+        self.assertEqual(
+            hardware.resolve_episode_workers(2, whisper_device="cuda"), (2, "theo config")
+        )
+
     def test_explicit_values_pass_through(self) -> None:
         self.assertEqual(hardware.resolve_whisper_cpu_threads(0), 0)
         self.assertEqual(hardware.resolve_whisper_cpu_threads(7, cpus=32), 7)

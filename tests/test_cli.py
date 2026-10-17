@@ -1069,6 +1069,42 @@ class TestPlaylistSubcommand(unittest.TestCase):
         self.assertIn("[playlist] LỖI", fake_stderr.getvalue())
         mock_run.assert_not_called()
 
+    def test_invalid_episode_workers_exits_two_without_network(self) -> None:
+        for value in ("3", "0", "true", "abc"):
+            with (
+                self.subTest(value=value),
+                patch("app.pipeline.playlist.run_playlist") as mock_run,
+                patch("app.pipeline.playlist.fetch_playlist") as mock_fetch,
+                patch("sys.stderr", new_callable=StringIO) as fake_stderr,
+            ):
+                exit_code = cli.main(
+                    ["playlist", "https://youtube.com/playlist?list=PLxxx", "--episode-workers", value]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("pipeline.episode_workers", fake_stderr.getvalue())
+            mock_run.assert_not_called()
+            mock_fetch.assert_not_called()
+
+    def test_episode_workers_flag_reaches_playlist_options(self) -> None:
+        from types import SimpleNamespace
+
+        fake = SimpleNamespace(
+            playlist_dir=Path("x"), total=0, selected=0, episodes=[], aborted=False
+        )
+        with (
+            patch("app.pipeline.playlist.run_playlist", return_value=fake) as mock_run,
+            patch("sys.stdout", new_callable=StringIO),
+        ):
+            cli.main(
+                ["playlist", "https://youtube.com/playlist?list=PLxxx", "--episode-workers", "2"]
+            )
+            options = mock_run.call_args.args[2]
+            self.assertEqual(options.episode_workers, 2)
+            cli.main(
+                ["playlist", "https://youtube.com/playlist?list=PLxxx", "--episode-workers", "1"]
+            )
+            self.assertEqual(mock_run.call_args.args[2].episode_workers, 1)
+
     def test_invalid_original_volume_exits_one_without_calling_run_playlist(self) -> None:
         with (
             patch("app.pipeline.playlist.run_playlist") as mock_run,

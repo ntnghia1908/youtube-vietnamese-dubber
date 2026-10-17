@@ -87,6 +87,9 @@ class PipelineConfig:
     # Ollama tắt, mất mạng — nhiều khả năng lặp lại y hệt ở các tập sau,
     # chạy tiếp chỉ tốn thời gian); 0 = không bao giờ dừng sớm.
     max_consecutive_failures: int = 3
+    # `playlist` (CP9-C): số tập xử lý song song, "auto" hoặc 1–MAX_WEB_JOBS.
+    # Luật auto xem app/hardware.py (cùng luật với web.max_jobs).
+    episode_workers: int | str = "auto"
 
 
 @dataclass(frozen=True)
@@ -176,6 +179,7 @@ _MIXING_TYPES: dict[str, tuple[type | None, ...]] = {
 _PIPELINE_TYPES: dict[str, tuple[type | None, ...]] = {
     "repair_rounds": (int,),
     "max_consecutive_failures": (int,),
+    "episode_workers": (int, str),
 }
 _WEB_TYPES: dict[str, tuple[type | None, ...]] = {
     "host": (str,),
@@ -255,14 +259,24 @@ def validate_skip_mixing(skip_original_volume: float, skip_fade_seconds: float) 
         )
 
 
-def validate_web_max_jobs(value: object) -> None:
-    """``"auto"`` hoặc số nguyên 1–MAX_WEB_JOBS. Dùng chung cho config và flag ``--max-jobs``."""
+def _validate_auto_or_small_int(name: str, value: object) -> None:
+    """``"auto"`` hoặc số nguyên 1–MAX_WEB_JOBS (bool bị từ chối)."""
     if value == "auto" and isinstance(value, str):
         return
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_WEB_JOBS:
         raise ConfigError(
-            f'`web.max_jobs` phải là "auto" hoặc số nguyên 1–{MAX_WEB_JOBS} (đang là {value!r}).'
+            f'`{name}` phải là "auto" hoặc số nguyên 1–{MAX_WEB_JOBS} (đang là {value!r}).'
         )
+
+
+def validate_web_max_jobs(value: object) -> None:
+    """``"auto"`` hoặc số nguyên 1–MAX_WEB_JOBS. Dùng chung cho config và flag ``--max-jobs``."""
+    _validate_auto_or_small_int("web.max_jobs", value)
+
+
+def validate_episode_workers(value: object) -> None:
+    """Như ``validate_web_max_jobs`` nhưng cho ``pipeline.episode_workers`` / ``--episode-workers``."""
+    _validate_auto_or_small_int("pipeline.episode_workers", value)
 
 
 def validate_whisper_cpu_threads(value: object) -> None:
@@ -401,6 +415,7 @@ def parse_config(data: Any) -> AppConfig:
             "`pipeline.max_consecutive_failures` không được âm (đang là "
             f"{pipeline.max_consecutive_failures})."
         )
+    validate_episode_workers(pipeline.episode_workers)
     kwargs["pipeline"] = pipeline
 
     web = WebConfig(**_check_section(data.get("web"), "web", _WEB_TYPES))

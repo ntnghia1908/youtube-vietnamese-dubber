@@ -8,7 +8,7 @@ Chỉ ghi operational state không suy ra được từ Git, task contract hoặ
 
 ## Current focus
 
-Đã xong tới **CP8** + Web UI (WEB-1, WEB-AUTH, WEB-2, WEB-PARALLEL, WEB-MOBILE, WEB-PARALLEL-PLAYLIST, WEB-POLISH) + **CP9-A** (glossary dùng chung theo playlist) + **CP9-B** (giữ nhạc gốc to ở đoạn `silent`). Tất cả đã commit, chưa push. Policy: tối đa 2 implementer song song (`docs/ai/project-profile.md` §7).
+Đã xong tới **CP8** + Web UI (WEB-1, WEB-AUTH, WEB-2, WEB-PARALLEL, WEB-MOBILE, WEB-PARALLEL-PLAYLIST, WEB-POLISH) + **CP9-A** (glossary dùng chung theo playlist) + **CP9-B** (giữ nhạc gốc to ở đoạn `silent`) + **CP9-C** (`playlist` xử lý 2 tập song song). Tất cả đã commit, chưa push. Policy: tối đa 2 implementer song song (`docs/ai/project-profile.md` §7).
 
 Server LAN 10.8.102.102:8081 chạy code mới nhất. Mật khẩu web ở `~/.config/dubber/web.env`. Manual test checklist WEB-1/WEB-AUTH/WEB-2/WEB-PARALLEL-PLAYLIST/WEB-POLISH/CP9-A/CP9-B chưa tick (máy Linux không có trình duyệt → kiểm tra trực quan là việc của HUMAN LEAD).
 
@@ -19,7 +19,7 @@ Ocean Girl (`PLllZo…`): đã có `output/PLllZo…/glossary.yaml` (glossary pl
 PROPOSED, không authorize implementation. Thứ tự CP9 HUMAN LEAD chọn 2026-10-17 (đã xong CP9-A, CP9-B):
 
 1. Không lồng tiếng phần bài hát của playlist Guess How Much I Love You (`PLJVKAfv…`) — giờ chủ yếu là dữ liệu: thêm `skip` vào glossary playlist của playlist đó qua web.
-2. Dịch 2 tập song song (bước dịch nhanh hơn 1.33× với `OLLAMA_NUM_PARALLEL=2`, số đo ở `docs/SETUP.md` A4) — cần `/spec`.
+2. ~~Dịch 2 tập song song~~ — xong CP9-C. HUMAN LEAD còn nợ: đặt `OLLAMA_NUM_PARALLEL=2` cho Ollama `127.0.0.1:11437` rồi đo (checklist CP9-C). Đang làm: WEB-DOWNLOAD (tải video lồng tiếng + tick đã tải, APPROVE TASK 2026-10-17).
 3. Nhiều giọng đọc thay vì một giọng HoaiMy (ưu tiên cuối; cần speaker diarization, cũng giải quyết xưng hô theo người nói).
 
 Ứng viên khác chưa chọn: câu dịch quá dài (EP1 22% `too_long`).

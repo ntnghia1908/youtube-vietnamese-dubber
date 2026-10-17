@@ -345,6 +345,7 @@ class JobManager:
         config_path: Path | None,
         *,
         max_jobs: int = 1,
+        episode_workers: int = 1,
         python: str = sys.executable,
         popen: Callable[..., Any] = subprocess.Popen,
         killpg: Callable[[int, int], None] | None = None,
@@ -355,6 +356,7 @@ class JobManager:
         self._workspace = Path(workspace)
         self._config_path = config_path
         self._max_jobs = max(1, int(max_jobs))
+        self._episode_workers = max(1, int(episode_workers))
         self._python = python
         self._popen = popen
         # killpg inject để test không bao giờ gửi tín hiệu thật tới pid giả.
@@ -369,9 +371,11 @@ class JobManager:
         self._queue: deque[str] = deque()
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
-        # job_id -> (proc hoặc None khi chưa spawn, targets). Đăng ký ngay khi
-        # lấy khỏi queue để hai worker không cùng lấy hai job xung đột.
-        self._running: dict[str, tuple[Any | None, frozenset[str]]] = {}
+        # job_id -> (proc hoặc None khi chưa spawn, targets, slots). Đăng ký ngay
+        # khi lấy khỏi queue để hai worker không cùng lấy hai job xung đột.
+        # slots = số run_dub job đó có thể chạy đồng thời (CP9-C): dub/glossary
+        # 1, playlist = số tập song song; tổng slots luôn <= max_jobs.
+        self._running: dict[str, tuple[Any | None, frozenset[str], int]] = {}
         self._cancel_requested: set[str] = set()
 
     # ---- đường dẫn / lưu trữ -------------------------------------------
@@ -454,7 +458,7 @@ class JobManager:
     def stop(self) -> None:
         self._stop_event.set()
         with self._cond:
-            procs = [proc for proc, _ in self._running.values() if proc is not None]
+            procs = [proc for proc, _, _ in self._running.values() if proc is not None]
             self._cond.notify_all()
         for proc in procs:
             self._signal(proc, force=True)
@@ -588,10 +592,27 @@ class JobManager:
             job["kind"], request, job["command"], workspace=self._workspace, index_map=index_map
         )
 
+    def _slots_for(self, job: dict[str, Any], free_slots: int) -> int:
+        """Số slot job chiếm. Không bao giờ chờ đủ slot: còn 1 slot thì playlist chạy 1 tập."""
+        if job["kind"] != "playlist":
+            return 1
+        slots = min(self._episode_workers, free_slots)
+        items = (job["request"].get("items") or "").strip()
+        if items:
+            try:
+                slots = min(slots, len(parse_item_spec(items)))
+            except PlaylistError:
+                pass  # spec lỗi: coi như không biết số tập
+        return max(1, slots)
+
     def _next_queued(self) -> str | None:
         with self._cond:
             while not self._stop_event.is_set():
-                busy = [targets for _, targets in self._running.values()]
+                busy = [targets for _, targets, _ in self._running.values()]
+                free_slots = self._max_jobs - sum(slots for _, _, slots in self._running.values())
+                if free_slots < 1:
+                    self._cond.wait(timeout=1.0)
+                    continue
                 for job_id in list(self._queue):
                     job = self._read(job_id)
                     if job is None or job["status"] != "queued":
@@ -601,7 +622,12 @@ class JobManager:
                     if any(targets_conflict(targets, b) for b in busy):
                         continue  # xung đột: giữ nguyên vị trí, job sau được vượt lên
                     self._queue.remove(job_id)
-                    self._running[job_id] = (None, targets)
+                    slots = self._slots_for(job, free_slots)
+                    if job["kind"] == "playlist":
+                        # Ghi lệnh TRƯỚC khi spawn để log/UI thấy đúng lệnh đã chạy.
+                        job["command"] = [*job["command"], "--episode-workers", str(slots)]
+                        self._write(job)
+                    self._running[job_id] = (None, targets, slots)
                     return job_id
                 self._cond.wait(timeout=1.0)
         return None
@@ -673,7 +699,7 @@ class JobManager:
 
             with self._lock:
                 if job_id in self._running:
-                    self._running[job_id] = (proc, self._running[job_id][1])
+                    self._running[job_id] = (proc, *self._running[job_id][1:])
                 current = self._read(job_id)
                 if current is not None:
                     current["pid"] = getattr(proc, "pid", None)

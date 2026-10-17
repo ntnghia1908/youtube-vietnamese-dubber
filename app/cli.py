@@ -327,6 +327,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    playlist_parser.add_argument(
+        "--episode-workers",
+        default=None,
+        help=(
+            'Số tập xử lý song song: "auto" hoặc 1–2 (mặc định: `pipeline.episode_workers`). '
+            "Dịch song song cần Ollama đặt OLLAMA_NUM_PARALLEL=2 (docs/SETUP.md A4)."
+        ),
+    )
+
     web_parser = subparsers.add_parser(
         "web",
         parents=[common],
@@ -871,13 +880,32 @@ def _cmd_playlist(args: argparse.Namespace, config: AppConfig) -> int:
             print(f"[playlist] LỖI: {exc}", file=sys.stderr)
             return 1
 
+    from app.config import validate_episode_workers
+    from app.hardware import resolve_episode_workers
+
+    workers_setting: object = config.pipeline.episode_workers
+    if args.episode_workers is not None:
+        raw = str(args.episode_workers).strip()
+        workers_setting = raw if raw == "auto" else (int(raw) if raw.lstrip("-").isdigit() else raw)
+    try:
+        validate_episode_workers(workers_setting)
+    except ConfigError as exc:
+        print(f"[playlist] LỖI: {exc}", file=sys.stderr)
+        return 2
+    episode_workers, workers_reason = resolve_episode_workers(
+        workers_setting, whisper_device=config.whisper.device  # type: ignore[arg-type]
+    )
+
     playlist_options = PlaylistOptions(
         dub=dub_options,
         items=items,
         recheck=args.recheck,
         max_consecutive_failures=config.pipeline.max_consecutive_failures,
         download_only=args.download_only,
+        episode_workers=episode_workers,
     )
+    if episode_workers > 1 and not args.download_only:
+        print(f"[playlist] xử lý song song {episode_workers} tập ({workers_reason})", flush=True)
     try:
         result = run_playlist(
             args.url,
@@ -949,7 +977,7 @@ def _cmd_playlist(args: argparse.Namespace, config: AppConfig) -> int:
 
 def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
     from app.config import validate_web_max_jobs, validate_web_port
-    from app.hardware import resolve_web_max_jobs
+    from app.hardware import resolve_episode_workers, resolve_web_max_jobs
     from app.web.auth import PASSWORD_ENV, is_loopback
 
     host = args.host if args.host is not None else config.web.host
@@ -1003,6 +1031,17 @@ def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
         file=sys.stderr,
         flush=True,
     )
+    # Job playlist không được vượt max_jobs slot (WEB-PARALLEL B1: toàn web
+    # <= max_jobs run_dub đồng thời), nên trần số tập song song là max_jobs.
+    workers_resolved, workers_reason = resolve_episode_workers(
+        config.pipeline.episode_workers, whisper_device=config.whisper.device
+    )
+    episode_workers = max(1, min(workers_resolved, max_jobs))
+    print(
+        f"[web] Job playlist: tối đa {episode_workers} tập song song ({workers_reason})",
+        file=sys.stderr,
+        flush=True,
+    )
     run(
         host,
         port,
@@ -1011,6 +1050,7 @@ def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
         password,
         Path(config.translation.glossary) if config.translation.glossary else None,
         max_jobs,
+        episode_workers=episode_workers,
     )
     return 0
 

@@ -430,6 +430,58 @@ class TestReadLog(unittest.TestCase):
             self.assertEqual(read_log_lines(Path(tmp) / "none", 0, final=True), ([], 0))
 
 
+class TestEpisodeSlots(ManagerCase):
+    """CP9-C: job playlist chiếm tối đa 2 slot; tổng slot <= max_jobs."""
+
+    def _ready(self, n: int) -> None:
+        wait_until(lambda: len(self.procs) >= n)
+
+    @staticmethod
+    def _workers(proc: FakeProc) -> str | None:
+        cmd = proc.cmd
+        return cmd[cmd.index("--episode-workers") + 1] if "--episode-workers" in cmd else None
+
+    def test_lone_playlist_gets_two_slots_and_blocks_dub(self) -> None:
+        m = self.make(max_jobs=2, episode_workers=2)
+        m.start()
+        jp = m.submit(JobRequest("playlist", PLAYLIST))
+        jd = m.submit(JobRequest("dub", "https://youtu.be/ddd"))
+        self._ready(1)
+        self.assertEqual(self._workers(self.procs[0]), "2")
+        self.assertIn("--episode-workers", m.get(jp["id"])["command"])  # ghi vào job JSON
+        time.sleep(0.3)
+        self.assertEqual(len(self.procs), 1)
+        self.assertEqual(self.status(m, jd["id"]), "queued")
+        self.procs[0].finish(0)
+        self._ready(2)
+        self.assertIsNone(self._workers(self.procs[1]))
+
+    def test_playlist_after_dub_gets_one_slot_and_runs_now(self) -> None:
+        m = self.make(max_jobs=2, episode_workers=2)
+        m.start()
+        m.submit(JobRequest("dub", "https://youtu.be/ddd"))
+        self._ready(1)
+        m.submit(JobRequest("playlist", PLAYLIST))
+        self._ready(2)
+        self.assertEqual(self._workers(self.procs[1]), "1")
+
+    def test_single_item_playlist_takes_one_slot(self) -> None:
+        m = self.make(max_jobs=2, episode_workers=2)
+        m.start()
+        m.submit(JobRequest("playlist", PLAYLIST, items="5"))
+        m.submit(JobRequest("dub", "https://youtu.be/ddd"))
+        self._ready(2)
+        playlist_proc = next(p for p in self.procs if "playlist" in p.cmd)
+        self.assertEqual(self._workers(playlist_proc), "1")
+
+    def test_default_manager_uses_one_worker(self) -> None:
+        m = self.make(max_jobs=2)
+        m.start()
+        m.submit(JobRequest("playlist", PLAYLIST))
+        self._ready(1)
+        self.assertEqual(self._workers(self.procs[0]), "1")
+
+
 if __name__ == "__main__":
     unittest.main()
 

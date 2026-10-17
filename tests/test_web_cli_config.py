@@ -69,7 +69,7 @@ class TestWebCommand(unittest.TestCase):
         """Chạy `cli.main` với `run` giả; trả (exit, calls, stderr)."""
         calls = []
         fake = type(sys)("app.web.server")
-        fake.run = lambda *a: calls.append(a)
+        fake.run = lambda *a, **kw: calls.append(a)
         config = parse_config({"web": {"host": "127.0.0.1", "port": 1111}, "workspace": "ws"})
         env = {} if env_password is None else {PASSWORD_ENV: env_password}
         err = io.StringIO()
@@ -113,7 +113,7 @@ class TestWebCommand(unittest.TestCase):
         config = parse_config({"workspace": "ws", "translation": {"glossary": "series.yaml"}})
         fake = type(sys)("app.web.server")
         calls2 = []
-        fake.run = lambda *a: calls2.append(a)
+        fake.run = lambda *a, **kw: calls2.append(a)
         with patch.object(cli, "_load_config", return_value=config), \
                 patch.dict(sys.modules, {"app.web.server": fake}):
             os.environ.pop(PASSWORD_ENV, None)

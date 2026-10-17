@@ -52,14 +52,14 @@ def resolve_whisper_cpu_threads(value: int | str, *, cpus: int | None = None) ->
     return max(1, min(WHISPER_THREADS_CAP, cpus // MAX_WEB_JOBS))
 
 
-def resolve_web_max_jobs(
+def _resolve_parallel_slots(
     value: int | str,
     *,
     whisper_device: str,
-    cpus: int | None = None,
-    cuda_devices: int | None = None,
+    cpus: int | None,
+    cuda_devices: int | None,
 ) -> tuple[int, str]:
-    """Trả ``(số job, lý do)``. ``auto``: có GPU dùng chung hoặc máy ít CPU -> 1."""
+    """Luật ``auto`` chung: có GPU dùng chung hoặc máy ít CPU -> 1, còn lại MAX_WEB_JOBS."""
     if value != "auto":
         return int(value), "theo config"
     if whisper_device == "cuda":
@@ -74,3 +74,29 @@ def resolve_web_max_jobs(
     if cpus < MIN_CPUS_FOR_PARALLEL:
         return 1, f"{cpus} CPU"
     return MAX_WEB_JOBS, f"{cpus} CPU"
+
+
+def resolve_web_max_jobs(
+    value: int | str,
+    *,
+    whisper_device: str,
+    cpus: int | None = None,
+    cuda_devices: int | None = None,
+) -> tuple[int, str]:
+    """Trả ``(số job, lý do)``. ``auto``: có GPU dùng chung hoặc máy ít CPU -> 1."""
+    return _resolve_parallel_slots(
+        value, whisper_device=whisper_device, cpus=cpus, cuda_devices=cuda_devices
+    )
+
+
+def resolve_episode_workers(
+    value: int | str,
+    *,
+    whisper_device: str,
+    cpus: int | None = None,
+    cuda_devices: int | None = None,
+) -> tuple[int, str]:
+    """``auto``: cùng luật với ``resolve_web_max_jobs`` (GPU CUDA dùng chung hoặc < 8 CPU -> 1, còn lại 2)."""
+    return _resolve_parallel_slots(
+        value, whisper_device=whisper_device, cpus=cpus, cuda_devices=cuda_devices
+    )

@@ -108,8 +108,15 @@ Số đo (RTX 3050 6 GB, `gemma3:12b`, 100 câu thật = 4 batch × 25, 2026-09-
 | Flash attention + KV `q8_0` | 353 s | 6,0 | 61/39 |
 | Như trên + `OLLAMA_NUM_PARALLEL=2`, 2 request song song | 265 s | 4,1 mỗi request (7,7 tổng) | 64/36 |
 
-Dòng cuối chỉ có lợi khi code gửi 2 request cùng lúc (dịch 2 tập song
-song) — pipeline hiện tại dịch tuần tự, **đừng** đặt `OLLAMA_NUM_PARALLEL`.
+Dòng cuối chỉ có lợi khi code gửi 2 request cùng lúc: từ CP9-C, `playlist`
+(và job playlist trên web) xử lý 2 tập song song khi `pipeline.episode_workers`
+= 2 (hoặc `auto` ra 2, hoặc `--episode-workers 2`). Khi đó nên đặt
+`OLLAMA_NUM_PARALLEL=2` cho Ollama (Windows: `setx OLLAMA_NUM_PARALLEL 2` như
+lệnh `OLLAMA_FLASH_ATTENTION` ngay trên, rồi khởi động lại Ollama; Linux:
+`sudo systemctl edit ollama` thêm `Environment="OLLAMA_NUM_PARALLEL=2"`, rồi
+`sudo systemctl restart ollama`). Không đặt thì Ollama xếp hàng request của
+hai tập — vẫn chạy đúng, chỉ không nhanh hơn. Lệnh `dub` (một tập) không bị
+ảnh hưởng.
 
 ### A5. Kết nối mạng cho TTS — cần cho Checkpoint 4 trở đi
 

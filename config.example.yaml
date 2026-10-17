@@ -49,6 +49,7 @@ mixing:
 pipeline:
   repair_rounds: 2   # `dub`: số vòng tối đa chạy lại translate (câu dịch lỗi) và tts+normalize (thiếu audio); 0 = không thử lại
   max_consecutive_failures: 3   # `playlist`: dừng sau N tập lỗi liên tiếp (lỗi hệ thống: Ollama tắt, hết mạng...); 0 = không dừng
+  episode_workers: auto   # `playlist`: số tập xử lý song song (1–2). auto = 1 nếu có GPU CUDA (dùng chung) hoặc máy < 8 CPU, còn lại 2. Dịch song song cần Ollama đặt OLLAMA_NUM_PARALLEL=2 (docs/SETUP.md A4)
 
 web:
   host: 127.0.0.1   # `python -m app web`: mặc định chỉ bind localhost. Mở LAN (host khác loopback) bắt buộc đặt biến môi trường DUBBER_WEB_PASSWORD (ADR-001 mục 9)
