@@ -139,3 +139,14 @@ class TestLoadSegments(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHasGlossary(unittest.TestCase):
+    def test_has_glossary_flag(self) -> None:
+        with TemporaryDirectory() as tmp:
+            ws = Path(tmp)
+            _full_episode(ws / "a__A")
+            _full_episode(ws / "b__B")
+            _write(ws / "b__B" / "glossary.yaml", "terms: {}\n")
+            _, singles = library.scan_workspace(ws)
+            self.assertEqual({e.rel_dir: e.has_glossary for e in singles}, {"a__A": False, "b__B": True})

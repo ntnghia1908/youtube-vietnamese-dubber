@@ -2,7 +2,7 @@
 
 ## Status / Approval
 
-- Status: DRAFT
+- Status: READY
 - Type: FEATURE
 - Change class: S2
 - Owner: HUMAN LEAD
@@ -13,7 +13,7 @@
 - Parallel group: —
 - Owned paths: app/web/**, app/cli.py (chỉ `_cmd_web`), tests/test_web_*.py, README.md, docs/decisions/WEB-2.md
 - Dependencies: WEB-1 (48cc251); WEB-AUTH (route mới phải nằm sau middleware auth); Ollama có model dịch cho phần chạy thật
-- Base commit / branch: 2e60f95 / main
+- Base commit / branch: 75fa13b / main
 - Human Lead approval: inherited from boundary
 - Implementation authorized: YES
 
@@ -202,9 +202,10 @@ Không chạm database / public API. Chạm security model: thêm route ghi file
 
 ## Result
 
-- Main changes:
-- Tests:
-- Review:
-- Important findings / decisions:
-- Known limitations:
-- PR:
+- Main changes: `app/web/glossary.py` (state/stale, validate bằng `parse_glossary`, lưu atomic + `.bak` + 409 theo sha bytes, `redub_request`); `jobs.py` kind `glossary` + `JobRequest.recheck/episode_key`, resolve key lúc submit; `server.py` trang `/ep/{key}/glossary`, `GET/PUT /api/episodes/{key}/glossary`, `POST .../glossary/draft`, `POST .../redub`, `shared_glossary`; `library.has_glossary`; templates + `glossary.js`; `_cmd_web` truyền `translation.glossary`; README; `docs/decisions/WEB-2.md`.
+- Tests: 543 OK (508 + 35 mới), ORCHESTRATOR chạy lại độc lập.
+- Chạy thật (workspace chép trong scratchpad, 127.0.0.1:8099, `output/` không đụng): Brian Cox — state ban đầu `exists:false, stale:false` (cả hai hash None); draft job completed ~10 s, draft lần 2 → 400; YAML hỏng → 400 có dòng/cột, file không đổi, không `.bak`; base sai → 409; thêm term → `stale:true` + `.bak`, thêm comment → effective hash giữ nguyên; redub → `dub <url>` không `--force`/`--source-lang`, "glossary đã thay đổi — dịch lại", 10/15 câu đổi, tts dùng cache 5, completed, `stale:false`; redub lần 2 → 6 stage SKIP. Ocean Girl index 1 (bản chép) → `playlist <url> --items 1 --recheck`, download SKIP, không tạo thư mục mới, completed; lần 2 SKIP. Origin lạ 403; traversal 404; HTML kiểm bằng curl.
+- Review: không blocking. Translate của ca playlist chạy lại ở lần đầu là do tập đó trước đó bị dừng giữa bước dịch (job `20261017-091102-0043e4`) — tiếp tục từ partial, không phải lỗi.
+- Important findings / decisions: trang Jobs ẩn kind `glossary` khỏi form nhập URL (decisions B2). `run()` nhận `shared_glossary` theo vị trí.
+- Known limitations: không cảnh báo khi lưu glossary trong lúc có job chạy cùng tập; `glossary.js` chưa chạy trong trình duyệt thật (nút, `beforeunload`, 409 hai tab) → Manual test checklist; glossary chỉ theo tập (chưa có glossary chung cho một playlist/series).
+- PR: commit thẳng `main` (profile §5).

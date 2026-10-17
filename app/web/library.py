@@ -21,6 +21,7 @@ from app.pipeline.dub import STAGES
 from app.pipeline.playlist import PLAYLIST_STATE_FILENAME
 from app.synchronization.timing import NORMALIZED_FILENAME
 from app.transcription.whisper import TRANSCRIPT_FILENAME
+from app.translation.glossary import GLOSSARY_FILENAME
 from app.translation.translate import TRANSLATED_FILENAME
 from app.tts.synthesize import MANIFEST_FILENAME, TTS_DIRNAME
 from app.youtube.download import METADATA_FILENAME, SOURCE_FILENAME
@@ -48,6 +49,7 @@ class EpisodeSummary:
     playlist_key: str | None
     stages: dict[str, str]
     too_long_count: int | None
+    has_glossary: bool = False
 
 
 @dataclass(frozen=True)
@@ -113,6 +115,7 @@ def _summarize_episode(episode_dir: Path, rel_dir: str, playlist_key: str | None
         playlist_key=playlist_key,
         stages=_stage_states(episode_dir),
         too_long_count=_too_long_count(episode_dir),
+        has_glossary=(episode_dir / GLOSSARY_FILENAME).is_file(),
     )
 
 

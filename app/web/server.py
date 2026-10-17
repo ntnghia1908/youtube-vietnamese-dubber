@@ -26,7 +26,8 @@ from fastapi.templating import Jinja2Templates
 
 from app.audio.render import OUTPUT_FILENAME
 from app.pipeline.dub import STAGES
-from app.web import auth, library
+from app.translation.glossary import GlossaryError
+from app.web import auth, glossary as web_glossary, library
 from app.web.jobs import (
     JOB_KINDS,
     TERMINAL_STATUSES,
@@ -78,6 +79,7 @@ def create_app(
     *,
     allowed_hosts: tuple[str, ...] = (),
     password: str | None = None,
+    shared_glossary: Path | None = None,
 ) -> FastAPI:
     workspace = Path(workspace)
     password = password or None  # chuỗi rỗng = tắt auth
@@ -229,7 +231,7 @@ def create_app(
 
     @app.get("/jobs")
     def jobs_page(request: Request):
-        return render(request, "jobs.html", jobs=job_manager.list(), kinds=JOB_KINDS)
+        return render(request, "jobs.html", jobs=job_manager.list(), kinds=[k for k in JOB_KINDS if k != "glossary"])
 
     @app.get("/jobs/{job_id}")
     def job_page(request: Request, job_id: str):
@@ -261,11 +263,73 @@ def create_app(
             request,
             "episode.html",
             ep=ep,
+            gstate=web_glossary.read_glossary_state(path, shared_glossary),
             segments=library.load_segments(path),
             has_output=has_output,
             has_source=has_source,
             stages=STAGES,
         )
+
+    @app.get("/ep/{key}/glossary")
+    def glossary_page(request: Request, key: str):
+        path, ep = episode_or_404(key)
+        return render(
+            request,
+            "glossary.html",
+            ep=ep,
+            gstate=web_glossary.read_glossary_state(path, shared_glossary),
+        )
+
+    # ---- API glossary (WEB-2) -----------------------------------------------
+
+    @app.get("/api/episodes/{key}/glossary")
+    def api_glossary(key: str):
+        path, _ = episode_or_404(key)
+        return web_glossary.read_glossary_state(path, shared_glossary).to_dict()
+
+    @app.put("/api/episodes/{key}/glossary")
+    async def api_glossary_save(request: Request, key: str):
+        check_origin(request)
+        path, _ = episode_or_404(key)
+        try:
+            data = json.loads(await request.body() or b"{}")
+        except ValueError:
+            return JSONResponse({"error": "Body không phải JSON hợp lệ."}, status_code=400)
+        content = data.get("content") if isinstance(data, dict) else None
+        base = data.get("base_sha256") if isinstance(data, dict) else None
+        if not isinstance(content, str) or not (base is None or isinstance(base, str)):
+            return JSONResponse(
+                {"error": "Cần `content` (chuỗi) và `base_sha256` (chuỗi hoặc null)."},
+                status_code=400,
+            )
+        try:
+            state = web_glossary.save_glossary_text(
+                path, content, base_sha256=base, shared_path=shared_glossary
+            )
+        except GlossaryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except web_glossary.GlossaryConflictError as exc:
+            current = web_glossary.read_glossary_state(path, shared_glossary).to_dict()
+            return JSONResponse({"error": str(exc), "state": current}, status_code=409)
+        return state.to_dict()
+
+    @app.post("/api/episodes/{key}/glossary/draft", status_code=201)
+    def api_glossary_draft(request: Request, key: str):
+        check_origin(request)
+        episode_or_404(key)
+        try:
+            return job_manager.submit(JobRequest(kind="glossary", episode_key=key))
+        except JobValidationError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/episodes/{key}/redub", status_code=201)
+    def api_redub(request: Request, key: str):
+        check_origin(request)
+        path, _ = episode_or_404(key)
+        try:
+            return job_manager.submit(web_glossary.redub_request(workspace, path))
+        except JobValidationError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
 
     # ---- API job ----------------------------------------------------------
 
@@ -294,11 +358,15 @@ def create_app(
 
         kind = data.get("kind")
         url = data.get("url")
+        if kind == "glossary" and url is None:
+            url = ""
         if not isinstance(kind, str) or not isinstance(url, str):
             raise JobValidationError("Thiếu `kind` hoặc `url` (chuỗi).")
         return JobRequest(
             kind=kind,
             url=url,
+            episode_key=opt_str("episode_key"),
+            recheck=_truthy(data.get("recheck", False)),
             source_lang=opt_str("source_lang"),
             items=opt_str("items"),
             force=_truthy(data.get("force", False)),
@@ -404,11 +472,13 @@ def run(
     workspace: Path,
     config_path: Path | None,
     password: str | None = None,
+    shared_glossary: Path | None = None,
 ) -> None:
     """Chạy uvicorn (chặn tới khi Ctrl+C)."""
     import uvicorn
 
     manager = JobManager(workspace, config_path)
-    app = create_app(workspace, manager, allowed_hosts=(host,), password=password)
+    app = create_app(workspace, manager, allowed_hosts=(host,), password=password,
+                     shared_glossary=shared_glossary)
     print(f"[web] http://{host}:{port}  (workspace: {workspace})", flush=True)
     uvicorn.run(app, host=host, port=port, log_level="info")

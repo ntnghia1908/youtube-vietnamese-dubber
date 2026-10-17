@@ -968,6 +968,7 @@ def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
         workspace,
         Path(args.config) if args.config else None,
         password,
+        Path(config.translation.glossary) if config.translation.glossary else None,
     )
     return 0
 

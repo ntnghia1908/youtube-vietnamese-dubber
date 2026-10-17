@@ -6,6 +6,12 @@
   — too_long: {{ ep.too_long_count if ep.too_long_count is not none else "—" }}
   {% if ep.playlist_key %}— <a href="/pl/{{ ep.playlist_key | urlencode }}">về playlist</a>{% endif %}</p>
 
+<p>Glossary: <a href="/ep/{{ ep.key | urlencode }}/glossary">{{ "sửa" if gstate.exists else "tạo" }}</a> —
+  {% if not gstate.exists and gstate.effective_sha256 is none %}chưa có glossary
+  {% elif gstate.stale is none %}chưa có bản dịch
+  {% elif gstate.stale %}<strong class="warn">bản dịch CŨ — cần dịch lại</strong>
+  {% else %}bản dịch khớp glossary{% endif %}</p>
+
 {% if has_output or has_source %}
   <div class="player">
     <video id="video" controls preload="metadata"

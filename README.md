@@ -208,6 +208,12 @@ python -m app web --workspace output   # mở http://127.0.0.1:8765
 - **Thư viện** (`/library`): trạng thái 6 stage từng tập, số câu `too_long`.
 - **Episode** (`/ep/...`): player `output_vi.mp4`/`source.mp4` (chuyển giữ thời điểm),
   bảng câu dịch click-để-tua, lọc `too_long`.
+- **Glossary** (`/ep/.../glossary`): sửa `glossary.yaml` của tập bằng textarea YAML (validate
+  bằng đúng parser của pipeline, giữ nguyên comment, bản cũ ở `glossary.yaml.bak`, hai tab
+  sửa cùng lúc thì tab lưu sau nhận xung đột 409). Hiện nhãn bản dịch có còn khớp glossary
+  không; **"Dịch lại & chạy tiếp"** chạy lại pipeline của tập (translate dịch lại vì glossary
+  đổi, tts chỉ tổng hợp câu đổi). **"Tạo nháp bằng model"** (tập chưa có glossary) chạy
+  `app glossary`. Glossary dùng chung (`translation.glossary`) chỉ hiện đường dẫn, không sửa ở web.
 - Cấu hình: section `web` (`host`, `port`) trong `config.yaml`, hoặc `--host`/`--port`.
 - Dùng trên LAN: đặt mật khẩu qua biến môi trường rồi bind IP LAN:
   `DUBBER_WEB_PASSWORD='...' python -m app web --host <IP LAN>`. Không đặt mật khẩu mà

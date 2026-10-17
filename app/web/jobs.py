@@ -33,7 +33,7 @@ from urllib.parse import parse_qs, urlparse
 
 from app.pipeline.playlist import PlaylistError, parse_item_spec
 
-JOB_KINDS = ("dub", "playlist")
+JOB_KINDS = ("dub", "playlist", "glossary")
 JOB_STATUSES = ("queued", "running", "completed", "failed", "cancelled", "interrupted")
 TERMINAL_STATUSES = ("completed", "failed", "cancelled", "interrupted")
 
@@ -63,17 +63,39 @@ class JobValidationError(ValueError):
 @dataclass
 class JobRequest:
     kind: str
-    url: str
+    url: str = ""
     source_lang: str | None = None
     items: str | None = None
     force: bool = False
     download_only: bool = False
+    recheck: bool = False  # chỉ playlist -> --recheck
+    episode_key: str | None = None  # bắt buộc với glossary, cấm với dub/playlist
 
 
 def validate_request(req: JobRequest) -> None:
     """Raise ``JobValidationError`` nếu request sai. Chạy TRƯỚC khi tạo job."""
     if req.kind not in JOB_KINDS:
-        raise JobValidationError(f"Loại job không hợp lệ: {req.kind!r}. Hợp lệ: dub, playlist.")
+        raise JobValidationError(f"Loại job không hợp lệ: {req.kind!r}. Hợp lệ: dub, playlist, glossary.")
+
+    if req.kind == "glossary":
+        # Nháp glossary chỉ nhận episode_key; server tự tra path (client không gửi path).
+        if not req.episode_key:
+            raise JobValidationError("Job glossary cần `episode_key`.")
+        for name, value in (
+            ("url", (req.url or "").strip()),
+            ("source_lang", req.source_lang),
+            ("items", req.items),
+            ("force", req.force),
+            ("download_only", req.download_only),
+            ("recheck", req.recheck),
+        ):
+            if value:
+                raise JobValidationError(f"Job glossary không nhận `{name}`.")
+        return
+    if req.episode_key:
+        raise JobValidationError("`episode_key` chỉ dùng cho job glossary.")
+    if req.recheck and req.kind != "playlist":
+        raise JobValidationError("`recheck` chỉ dùng cho job playlist.")
 
     url = (req.url or "").strip()
     try:
@@ -125,8 +147,17 @@ def build_command(
     workspace: Path,
     config_path: Path | None,
     python: str = sys.executable,
+    episode_dir: Path | None = None,
 ) -> list[str]:
     """Lệnh CLI tương ứng với request (list args, không qua shell)."""
+    if req.kind == "glossary":
+        # `glossary` không có --workspace; không bao giờ --force (không ghi đè glossary người dùng).
+        if episode_dir is None:
+            raise JobValidationError("Job glossary cần thư mục episode.")
+        cmd = [python, "-m", "app", "glossary", str(episode_dir)]
+        if config_path is not None:
+            cmd += ["--config", str(config_path)]
+        return cmd
     cmd = [python, "-m", "app", req.kind, req.url.strip(), "--workspace", str(workspace)]
     if config_path is not None:
         cmd += ["--config", str(config_path)]
@@ -138,6 +169,8 @@ def build_command(
         cmd.append("--force")
     if req.download_only:
         cmd.append("--download-only")
+    if req.recheck:
+        cmd.append("--recheck")
     return cmd
 
 
@@ -337,13 +370,18 @@ class JobManager:
 
     def _submit(self, req: JobRequest, retry_of: str | None) -> dict[str, Any]:
         validate_request(req)
-        req = JobRequest(**{**asdict(req), "url": req.url.strip()})
+        req = JobRequest(**{**asdict(req), "url": (req.url or "").strip()})
+        episode_dir = self._resolve_glossary_episode(req) if req.kind == "glossary" else None
         job = {
             "id": _new_job_id(),
             "kind": req.kind,
             "request": {k: v for k, v in asdict(req).items() if k != "kind"},
             "command": build_command(
-                req, workspace=self._workspace, config_path=self._config_path, python=self._python
+                req,
+                workspace=self._workspace,
+                config_path=self._config_path,
+                python=self._python,
+                episode_dir=episode_dir,
             ),
             "status": "queued",
             "exit_code": None,
@@ -359,6 +397,21 @@ class JobManager:
             self._queue.append(job["id"])
             self._cond.notify_all()
         return job
+
+    def _resolve_glossary_episode(self, req: JobRequest) -> Path:
+        """Tra path tập từ ``episode_key`` lúc submit (retry cũng đi qua đây nên kiểm lại)."""
+        from app.translation.glossary import GLOSSARY_FILENAME
+        from app.transcription.whisper import TRANSCRIPT_FILENAME
+        from app.web import library
+
+        episode_dir = library.find_episode(self._workspace, req.episode_key or "")
+        if episode_dir is None:
+            raise JobValidationError("Không có episode này.")
+        if not (episode_dir / TRANSCRIPT_FILENAME).is_file():
+            raise JobValidationError("Tập chưa có transcript.json, chưa tạo nháp glossary được.")
+        if (episode_dir / GLOSSARY_FILENAME).exists():
+            raise JobValidationError("Tập đã có glossary — sửa ở editor, không tạo nháp đè.")
+        return episode_dir
 
     def get(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:

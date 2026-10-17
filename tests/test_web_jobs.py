@@ -105,6 +105,34 @@ class TestValidate(unittest.TestCase):
         self.assertInvalid(kind="dub", url=VIDEO, download_only=True)
 
 
+class TestGlossaryValidate(unittest.TestCase):
+    def assertInvalid(self, **kw) -> None:
+        with self.assertRaises(JobValidationError):
+            validate_request(JobRequest(**kw))
+
+    def test_glossary_rules(self) -> None:
+        validate_request(JobRequest("glossary", episode_key="v1__t"))
+        self.assertInvalid(kind="glossary")  # thiếu episode_key
+        for extra in ({"url": VIDEO}, {"force": True}, {"items": "1"}, {"source_lang": "zh"},
+                      {"download_only": True}, {"recheck": True}):
+            self.assertInvalid(kind="glossary", episode_key="k", **extra)
+
+    def test_recheck_and_episode_key_rules(self) -> None:
+        validate_request(JobRequest("playlist", PLAYLIST, items="1", recheck=True))
+        self.assertInvalid(kind="dub", url=VIDEO, recheck=True)
+        self.assertInvalid(kind="dub", url=VIDEO, episode_key="k")
+        self.assertInvalid(kind="playlist", url=PLAYLIST, episode_key="k")
+
+    def test_build_commands(self) -> None:
+        cmd = build_command(JobRequest("glossary", episode_key="k"), workspace=Path("output"),
+                            config_path=Path("c.yaml"), python="py", episode_dir=Path("output/ep"))
+        self.assertEqual(cmd, ["py", "-m", "app", "glossary", "output/ep", "--config", "c.yaml"])
+        cmd = build_command(JobRequest("playlist", PLAYLIST, items="3", recheck=True),
+                            workspace=Path("output"), config_path=None, python="py")
+        self.assertEqual(cmd, ["py", "-m", "app", "playlist", PLAYLIST, "--workspace", "output",
+                               "--items", "3", "--recheck"])
+
+
 class TestBuildAndProgress(unittest.TestCase):
     def test_build_dub(self) -> None:
         cmd = build_command(JobRequest("dub", VIDEO), workspace=Path("output"), config_path=None, python="py")
@@ -402,3 +430,56 @@ class TestReadLog(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGlossaryJobs(ManagerCase):
+    def _episode(self, name: str = "v1__t", *, transcript: bool = True, glossary: bool = False) -> None:
+        d = self.ws / name
+        d.mkdir(parents=True)
+        (d / "metadata.json").write_text(json.dumps({"id": "v1"}), encoding="utf-8")
+        if transcript:
+            (d / "transcript.json").write_text("{}", encoding="utf-8")
+        if glossary:
+            (d / "glossary.yaml").write_text("terms: {}\n", encoding="utf-8")
+
+    def test_submit_resolves_key(self) -> None:
+        self._episode()
+        m = self.make()
+        job = m.submit(JobRequest("glossary", episode_key="v1__t"))
+        self.assertEqual(job["command"], ["py", "-m", "app", "glossary", str(self.ws / "v1__t")])
+        self.assertEqual(job["request"]["episode_key"], "v1__t")
+        self.assertNotIn("--force", job["command"])
+
+    def test_rejections(self) -> None:
+        m = self.make()
+        with self.assertRaises(JobValidationError):
+            m.submit(JobRequest("glossary", episode_key="khong-co"))
+        with self.assertRaises(JobValidationError):
+            m.submit(JobRequest("glossary", episode_key=".."))
+        self._episode("a__a", transcript=False)
+        with self.assertRaises(JobValidationError):
+            m.submit(JobRequest("glossary", episode_key="a__a"))
+        self._episode("b__b", glossary=True)
+        with self.assertRaises(JobValidationError):
+            m.submit(JobRequest("glossary", episode_key="b__b"))
+        self.assertEqual(m.list(), [])
+
+    def test_retry_rejected_after_glossary_exists(self) -> None:
+        self._episode()
+        m = self.make()
+        job = m.submit(JobRequest("glossary", episode_key="v1__t"))
+        (self.ws / "v1__t" / "glossary.yaml").write_text("terms: {}\n", encoding="utf-8")
+        with self.assertRaises(JobValidationError):
+            m.retry(job["id"])
+
+    def test_old_job_json_without_new_fields_retries(self) -> None:
+        m = self.make()
+        old = {"id": "20260101-000000-aaaaaa", "kind": "dub",
+               "request": {"url": VIDEO, "source_lang": None, "items": None, "force": False,
+                           "download_only": False},
+               "command": [], "status": "failed", "exit_code": 1, "created_at": "x",
+               "started_at": None, "finished_at": None, "progress": None, "retry_of": None, "pid": None}
+        m._write(old)
+        new = m.retry(old["id"])
+        self.assertFalse(new["request"]["recheck"])
+        self.assertIsNone(new["request"]["episode_key"])

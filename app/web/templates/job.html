@@ -6,7 +6,7 @@
   <p>Loại: <strong>{{ job.kind }}</strong> — trạng thái: <span id="status" class="badge st-{{ job.status }}">{{ job.status }}</span>
      — exit code: <span id="exit-code">{{ job.exit_code if job.exit_code is not none else "—" }}</span></p>
   <p>Tiến độ: <span id="progress">{{ job.progress | progress }}</span></p>
-  <p>URL: <span class="url">{{ job.request.url }}</span></p>
+  <p>{% if job.request.episode_key %}Episode: <a href="/ep/{{ job.request.episode_key | urlencode }}/glossary">{{ job.request.episode_key }}</a>{% else %}URL: <span class="url">{{ job.request.url }}</span>{% endif %}</p>
   <p>Lệnh: <code>{{ job.command | join(" ") }}</code></p>
   {% if job.retry_of %}<p>Chạy lại từ <a href="/jobs/{{ job.retry_of }}">{{ job.retry_of }}</a></p>{% endif %}
   <button id="cancel" type="button">Hủy</button>

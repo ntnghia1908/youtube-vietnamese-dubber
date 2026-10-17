@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Glossary — {{ ep.title or ep.rel_dir }}{% endblock %}
+{% block content %}
+<h1>Glossary: <a href="/ep/{{ ep.key | urlencode }}">{{ ep.title or ep.rel_dir }}</a></h1>
+
+<p id="stale-label" class="warn">
+  {% if gstate.stale is none %}Chưa có bản dịch (hoặc glossary đang lỗi).
+  {% elif gstate.stale %}Bản dịch CŨ — cần dịch lại.
+  {% else %}Bản dịch khớp glossary.{% endif %}
+</p>
+{% if gstate.shared_path %}
+  <p>Glossary dùng chung (chỉ đọc, gộp với glossary của tập): <code>{{ gstate.shared_path }}</code></p>
+{% endif %}
+<p id="state-error" class="error">{{ gstate.error or "" }}</p>
+
+<form id="glossary-form" data-key="{{ ep.key }}" data-sha="{{ gstate.file_sha256 or '' }}"
+      data-has-transcript="{{ '1' if gstate.has_transcript else '' }}">
+  <textarea id="glossary-text" rows="28" cols="100" spellcheck="false"
+            placeholder="# Cấu trúc (mọi key đều tuỳ chọn):
+context: mô tả bối cảnh
+characters:
+  - name: Tên gốc
+    vi: Tên tiếng Việt
+    aliases: [tên khác]
+    note: ghi chú
+address:
+  - {speaker: A, listener: B, self: tôi, other: bạn}
+terms:
+  quantum mechanics: cơ học lượng tử
+skip:
+  - cụm không dịch">{{ gstate.content }}</textarea>
+  <p>
+    <button type="submit" id="save">Lưu</button>
+    {% if not gstate.exists and gstate.has_transcript %}<button type="button" id="draft">Tạo nháp bằng model</button>{% endif %}
+    {% if gstate.has_transcript %}<button type="button" id="redub">Dịch lại &amp; chạy tiếp</button>{% endif %}
+  </p>
+  <p id="msg" class="error"></p>
+</form>
+{% endblock %}
+{% block scripts %}<script src="/static/glossary.js"></script>{% endblock %}

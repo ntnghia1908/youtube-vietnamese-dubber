@@ -88,6 +88,19 @@ class TestWebCommand(unittest.TestCase):
             ["web", "--host", "10.0.0.5", "--port", "2222", "--workspace", "w2"], "pw")
         self.assertEqual((code, calls[0][:2], str(calls[0][2])), (0, ("10.0.0.5", 2222), "w2"))
 
+    def test_shared_glossary_passed_to_run(self) -> None:
+        code, calls, _ = self._run_web(["web"], None)
+        self.assertIsNone(calls[0][5])
+        config = parse_config({"workspace": "ws", "translation": {"glossary": "series.yaml"}})
+        fake = type(sys)("app.web.server")
+        calls2 = []
+        fake.run = lambda *a: calls2.append(a)
+        with patch.object(cli, "_load_config", return_value=config), \
+                patch.dict(sys.modules, {"app.web.server": fake}):
+            os.environ.pop(PASSWORD_ENV, None)
+            cli.main(["web"])
+        self.assertEqual(str(calls2[0][5]), "series.yaml")
+
     def test_startup_rule_table(self) -> None:
         # (host, mật khẩu env) -> (exit, mật khẩu truyền cho run)
         cases = [

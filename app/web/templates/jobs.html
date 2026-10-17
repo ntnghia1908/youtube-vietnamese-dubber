@@ -26,7 +26,7 @@
     <tr>
       <td><a href="/jobs/{{ j.id }}">{{ j.id }}</a></td>
       <td>{{ j.kind }}</td>
-      <td class="url">{{ j.request.url }}</td>
+      <td class="url">{% if j.request.episode_key %}glossary: {{ j.request.episode_key }}{% else %}{{ j.request.url }}{% endif %}</td>
       <td><span class="badge st-{{ j.status }}">{{ j.status }}</span></td>
       <td>{{ j.progress | progress }}</td>
       <td>{{ j.created_at }}</td>

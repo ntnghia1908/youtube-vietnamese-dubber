@@ -216,6 +216,147 @@ class TestServer(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_WEB, "cần `pip install -e .[web]`")
+class TestServerGlossary(unittest.TestCase):
+    """WEB-2: editor glossary + draft + redub — AC1–AC9."""
+
+    GOOD = "terms:\n  quantum mechanics: cơ học lượng tử\n"
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.ws = Path(self._tmp.name)
+        self.manager = JobManager(self.ws, None, python="py", popen=lambda cmd, **kw: FakeProc(cmd))
+        self.client = TestClient(create_app(self.ws, self.manager, allowed_hosts=("testserver",)))
+        self.addCleanup(self.manager.stop)
+        self.ep = self.ws / "v1__t"
+        _episode(self.ep, "T")
+        _w(self.ep / "metadata.json", json.dumps({"id": "v1", "title": "T", "duration_seconds": 61,
+                                                  "original_url": VIDEO}))
+
+    def put(self, content, base, **kw):
+        return self.client.put("/api/episodes/v1__t/glossary",
+                               content=json.dumps({"content": content, "base_sha256": base}), **kw)
+
+    def test_get_state_and_page(self) -> None:
+        st = self.client.get("/api/episodes/v1__t/glossary").json()
+        self.assertEqual((st["exists"], st["stale"], st["has_transcript"], st["has_translation"]),
+                         (False, False, True, True))
+        page = self.client.get("/ep/v1__t/glossary")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("<textarea", page.text)
+        self.assertIn("Tạo nháp bằng model", page.text)
+        self.assertIn("/static/glossary.js", page.text)
+        self.assertEqual(self.client.get("/static/glossary.js").status_code, 200)
+        self.assertIn("glossary", self.client.get("/ep/v1__t").text)
+        self.assertIn("<th>glossary</th>", self.client.get("/library").text)
+
+    def test_put_ok_bad_conflict(self) -> None:
+        r = self.put(self.GOOD, None)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["stale"])  # translated.json không có hash, glossary hiệu lực có
+        self.assertEqual((self.ep / "glossary.yaml").read_text(encoding="utf-8"), self.GOOD)
+        sha = r.json()["file_sha256"]
+        before = (self.ep / "glossary.yaml").read_bytes()
+        for bad in ("terms: [\n", "alias: x\n", "context: " + "a" * 300_000):
+            r = self.put(bad, sha)
+            self.assertEqual(r.status_code, 400, bad[:20])
+            self.assertIn("error", r.json())
+        self.assertEqual((self.ep / "glossary.yaml").read_bytes(), before)
+        self.assertFalse((self.ep / "glossary.yaml.bak").exists())
+        r = self.put("terms: {}\n", "sai")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["state"]["file_sha256"], sha)
+        self.assertEqual((self.ep / "glossary.yaml").read_bytes(), before)
+        self.assertEqual(self.client.put("/api/episodes/v1__t/glossary", content="không json").status_code, 400)
+        self.assertEqual(self.client.put("/api/episodes/v1__t/glossary", content="{}").status_code, 400)
+
+    def test_unknown_key_origin(self) -> None:
+        for path in ("/ep/nope/glossary", "/api/episodes/nope/glossary", "/api/episodes/..%2F..%2Fx/glossary"):
+            self.assertEqual(self.client.get(path).status_code, 404, path)
+        for path in ("/api/episodes/nope/glossary/draft", "/api/episodes/nope/redub"):
+            self.assertEqual(self.client.post(path).status_code, 404, path)
+        self.assertEqual(self.put(self.GOOD, None, headers={"Origin": "http://evil.example"}).status_code, 403)
+        for path in ("/api/episodes/v1__t/glossary/draft", "/api/episodes/v1__t/redub"):
+            r = self.client.post(path, headers={"Origin": "http://evil.example"})
+            self.assertEqual(r.status_code, 403, path)
+        self.assertFalse((self.ep / "glossary.yaml").exists())
+        self.assertEqual(self.manager.list(), [])
+
+    def test_draft_job(self) -> None:
+        r = self.client.post("/api/episodes/v1__t/glossary/draft")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["kind"], "glossary")
+        self.assertEqual(r.json()["command"][3:5], ["glossary", str(self.ep)])
+        jobs = self.client.get("/jobs")
+        self.assertIn("glossary: v1__t", jobs.text)
+        self.assertEqual(self.client.get(f"/jobs/{r.json()['id']}").status_code, 200)
+        (self.ep / "glossary.yaml").write_text(self.GOOD, encoding="utf-8")
+        self.assertEqual(self.client.post("/api/episodes/v1__t/glossary/draft").status_code, 400)
+        (self.ep / "glossary.yaml").unlink()
+        (self.ep / "transcript.json").unlink()
+        self.assertEqual(self.client.post("/api/episodes/v1__t/glossary/draft").status_code, 400)
+        self.assertNotIn("Tạo nháp", self.client.get("/ep/v1__t/glossary").text)
+
+    def test_redub_single_and_playlist(self) -> None:
+        r = self.client.post("/api/episodes/v1__t/redub")
+        self.assertEqual(r.status_code, 201)
+        cmd = r.json()["command"]
+        self.assertEqual(cmd[3:5], ["dub", VIDEO])
+        self.assertNotIn("--force", cmd)
+        self.assertNotIn("--source-lang", cmd)
+        pl = self.ws / "PL__x"
+        _w(pl / "playlist.json", json.dumps({"url": "https://www.youtube.com/playlist?list=PLx", "entries": [
+            {"index": 4, "title": "x", "episode_dir": "b__B"}]}))
+        _episode(pl / "b__B", "B")
+        r = self.client.post("/api/episodes/PL__x~b__B/redub")
+        self.assertEqual(r.status_code, 201)
+        cmd = r.json()["command"]
+        self.assertEqual(cmd[3:5], ["playlist", "https://www.youtube.com/playlist?list=PLx"])
+        self.assertEqual(cmd[-3:], ["--items", "4", "--recheck"])
+        _w(self.ep / "metadata.json", "{}")
+        self.assertEqual(self.client.post("/api/episodes/v1__t/redub").status_code, 400)
+
+    def test_api_jobs_glossary_kind(self) -> None:
+        post = lambda body: self.client.post("/api/jobs", content=json.dumps(body))  # noqa: E731
+        self.assertEqual(post({"kind": "glossary", "episode_key": "v1__t"}).status_code, 201)
+        self.assertEqual(post({"kind": "glossary"}).status_code, 400)
+        self.assertEqual(post({"kind": "glossary", "episode_key": "zzz"}).status_code, 400)
+        self.assertEqual(post({"kind": "glossary", "episode_key": "v1__t", "force": True}).status_code, 400)
+        self.assertEqual(post({"kind": "glossary", "episode_key": "v1__t", "url": VIDEO}).status_code, 400)
+        self.assertEqual(post({"kind": "dub", "url": VIDEO, "recheck": True}).status_code, 400)
+        self.assertEqual(post({"kind": "playlist", "url": "https://www.youtube.com/playlist?list=P",
+                               "recheck": True}).status_code, 201)
+
+    def test_content_escaped_and_broken_file_opens(self) -> None:
+        (self.ep / "glossary.yaml").write_text("context: </textarea><script>alert(1)</script>\n[", encoding="utf-8")
+        page = self.client.get("/ep/v1__t/glossary")
+        self.assertEqual(page.status_code, 200)
+        self.assertNotIn("<script>alert", page.text)
+        self.assertIn("&lt;/textarea&gt;&lt;script&gt;", page.text)
+        st = self.client.get("/api/episodes/v1__t/glossary").json()
+        self.assertTrue(st["error"])
+        self.assertEqual(self.put(self.GOOD, st["file_sha256"]).status_code, 200)
+
+    def test_shared_glossary_shown(self) -> None:
+        shared = self.ws / "shared.yaml"
+        shared.write_text("terms:\n  a: b\n", encoding="utf-8")
+        client = TestClient(create_app(self.ws, self.manager, allowed_hosts=("testserver",),
+                                       shared_glossary=shared))
+        st = client.get("/api/episodes/v1__t/glossary").json()
+        self.assertEqual(st["shared_path"], str(shared))
+        self.assertTrue(st["stale"])
+        self.assertIn(str(shared), client.get("/ep/v1__t/glossary").text)
+
+    def test_only_expected_files_written(self) -> None:
+        before = {p.relative_to(self.ws).as_posix() for p in self.ws.rglob("*")}
+        self.put(self.GOOD, None)
+        sha = self.client.get("/api/episodes/v1__t/glossary").json()["file_sha256"]
+        self.put(self.GOOD + "# c\n", sha)
+        after = {p.relative_to(self.ws).as_posix() for p in self.ws.rglob("*")}
+        self.assertEqual(after - before, {"v1__t/glossary.yaml", "v1__t/glossary.yaml.bak"})
+
+
+@unittest.skipUnless(HAVE_WEB, "cần `pip install -e .[web]`")
 class TestServerAuth(unittest.TestCase):
     """WEB-AUTH: create_app(..., password=...) — AC3–AC9."""
 
@@ -252,7 +393,9 @@ class TestServerAuth(unittest.TestCase):
     def test_unauthenticated(self) -> None:
         r = self.client.get("/library?x=1", headers=self.HTML, follow_redirects=False)
         self.assertEqual((r.status_code, r.headers["location"]), (303, "/login?next=%2Flibrary%3Fx%3D1"))
-        for method, path in (("get", "/api/jobs"), ("get", "/media/v1__t/output"),
+        for method, path in (("put", "/api/episodes/v1__t/glossary"), ("get", "/api/episodes/v1__t/glossary"),
+                             ("post", "/api/episodes/v1__t/redub"), ("post", "/api/episodes/v1__t/glossary/draft"),
+                             ("get", "/ep/v1__t/glossary"), ("get", "/api/jobs"), ("get", "/media/v1__t/output"),
                              ("get", "/api/jobs/x/events"), ("post", "/api/jobs"), ("get", "/library")):
             r = getattr(self.client, method)(path, follow_redirects=False)
             self.assertEqual(r.status_code, 401, path)
