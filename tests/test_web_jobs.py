@@ -18,6 +18,7 @@ from app.web.jobs import (
     JobValidationError,
     build_command,
     job_targets,
+    targets_conflict,
     parse_progress,
     read_log_lines,
     validate_request,
@@ -507,14 +508,94 @@ class TestJobTargets(unittest.TestCase):
         self.assertEqual(job_targets("glossary", {}, cmd, workspace=ws), {"video:v1"})
         cmd = ["py", "-m", "app", "glossary", "/ws/PLxyz__pl/v1__t"]
         self.assertEqual(
-            job_targets("glossary", {}, cmd, workspace=ws), {"video:v1", "playlist:PLxyz"}
+            job_targets("glossary", {}, cmd, workspace=ws), {"video:v1", "in-playlist:PLxyz"}
         )
         self.assertEqual(
-            job_targets("glossary", {}, cmd), {"video:v1", "playlist:PLxyz"}
+            job_targets("glossary", {}, cmd), {"video:v1", "in-playlist:PLxyz"}
         )
+
+    def test_playlist_items_mapped_and_unmapped(self) -> None:
+        idx = {1: "a", 2: "b", 3: "c"}
+        req = lambda items: {"url": PLAYLIST, "items": items}  # noqa: E731
+        self.assertEqual(
+            job_targets("playlist", req("2"), [], index_map=idx), {"video:b", "in-playlist:PLxyz"}
+        )
+        self.assertEqual(
+            job_targets("playlist", req("1-2"), [], index_map=idx),
+            {"video:a", "video:b", "in-playlist:PLxyz"},
+        )
+        whole = {"playlist:PLxyz"}
+        self.assertEqual(job_targets("playlist", req("9"), [], index_map=idx), whole)
+        self.assertEqual(job_targets("playlist", req("2"), [], index_map=None), whole)
+        self.assertEqual(job_targets("playlist", req("2"), [], index_map={}), whole)
+        self.assertEqual(job_targets("playlist", {"url": PLAYLIST}, [], index_map=idx), whole)
+        self.assertEqual(job_targets("playlist", req("x"), [], index_map=idx), whole)
+
+
+class TestTargetsConflict(unittest.TestCase):
+    IDX = {1: "a", 2: "b", 3: "c"}
+
+    def t(self, items):
+        return job_targets("playlist", {"url": PLAYLIST, "items": items}, [], index_map=self.IDX)
+
+    def test_table(self) -> None:
+        whole = job_targets("playlist", {"url": PLAYLIST}, [], index_map=self.IDX)
+        gloss2 = frozenset({"video:b", "in-playlist:PLxyz"})
+        cases = [
+            (self.t("2"), self.t("3"), False),
+            (self.t("2"), self.t("1-3"), True),
+            (self.t("2"), gloss2, True),
+            (self.t("3"), gloss2, False),
+            (whole, self.t("2"), True),
+            (whole, gloss2, True),
+            (whole, whole, True),
+            (frozenset({"video:b"}), self.t("2"), True),
+            (frozenset({"video:b"}), self.t("3"), False),
+            (frozenset({"video:b"}), whole, False),
+        ]
+        for a, b, expected in cases:
+            with self.subTest(a=sorted(a), b=sorted(b)):
+                self.assertEqual(targets_conflict(a, b), expected)
+                self.assertEqual(targets_conflict(b, a), expected)
 
 
 class TestParallel(ManagerCase):
+    def _write_playlist_json(self) -> None:
+        d = self.ws / "PLxyz__pl"
+        d.mkdir(parents=True, exist_ok=True)
+        entries = [{"index": i, "video_id": f"v{i}"} for i in (1, 2, 3)]
+        (d / "playlist.json").write_text(json.dumps({"entries": entries}), encoding="utf-8")
+
+    def test_same_playlist_different_episodes_run_together(self) -> None:
+        self._write_playlist_json()
+        m = self.make(max_jobs=2)
+        m.start()
+        m.submit(JobRequest("playlist", PLAYLIST, items="2"))
+        m.submit(JobRequest("playlist", PLAYLIST, items="3"))
+        self._ready(2)
+
+    def test_same_episode_waits(self) -> None:
+        self._write_playlist_json()
+        m = self.make(max_jobs=2)
+        m.start()
+        m.submit(JobRequest("playlist", PLAYLIST, items="2"))
+        j2 = m.submit(JobRequest("playlist", PLAYLIST, items="1-3"))
+        self._ready(1)
+        time.sleep(0.3)
+        self.assertEqual(len(self.procs), 1)
+        self.assertEqual(self.status(m, j2["id"]), "queued")
+        self.procs[0].finish(0)
+        self._ready(2)
+
+    def test_items_without_playlist_json_locks_whole_playlist(self) -> None:
+        m = self.make(max_jobs=2)
+        m.start()
+        m.submit(JobRequest("playlist", PLAYLIST, items="2"))
+        m.submit(JobRequest("playlist", PLAYLIST, items="3"))
+        self._ready(1)
+        time.sleep(0.3)
+        self.assertEqual(len(self.procs), 1)
+
     def _ready(self, n: int) -> None:
         wait_until(lambda: len(self.procs) >= n)
 

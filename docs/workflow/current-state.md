@@ -10,7 +10,9 @@ Chỉ ghi operational state không suy ra được từ Git, task contract hoặ
 
 Đã xong tới **CP8** (`dub` end-to-end, `playlist` với luồng tải song song + resume qua `playlist.json`). Playlist thật đang dùng: `PLJVKAfvqjvcp9lhYU37emhlRZExZrx0Cm` (22 tập, EP13–21 Private, tập dài 18–36 phút, ~35 phút xử lý/tập). EP1 đã `completed`, EP2 đã có transcript.
 
-**WEB-1**, **WEB-AUTH**, **WEB-2** đã commit; **WEB-PARALLEL** READY (hàng đợi web tối đa 2 job song song, `whisper.cpu_threads`/`web.max_jobs` = `auto` theo CPU từng máy — máy này 2 job × 12 thread). WEB-1/WEB-AUTH/WEB-2 (đăng nhập bằng mật khẩu khi bind LAN, ADR-001 mục 9; mật khẩu ở `~/.config/dubber/web.env`, nạp qua `~/.bashrc`) — chờ HUMAN LEAD chạy Manual test checklist. Output để nghe (server 10.8.102.102:8081, code WEB-PARALLEL): EP01 playlist `PLJVKAfv…` đã `completed`; Ocean Girl index 2 (job `20261017-101751-00b33d`, có `glossary.yaml` chỉ `skip` lời bài hát chủ đề) đang chạy, index 3 (`20261017-101755-003671`) xếp sau vì cùng playlist. Cần kiểm `translated.json` Ocean Girl xem lời bài hát có lọt `skip` không. Nghe xong mới chọn hạng mục CP9.
+**WEB-1**, **WEB-AUTH**, **WEB-2**, **WEB-PARALLEL**, **WEB-MOBILE**, **WEB-PARALLEL-PLAYLIST** đã commit (chưa push). Hàng đợi web: tối đa 2 job song song; hai job **khác tập** của cùng playlist chạy song song, trùng tập thì chờ. Web UI dùng tốt trên điện thoại (HUMAN LEAD đã xác nhận). Mật khẩu web ở `~/.config/dubber/web.env`. Manual test checklist WEB-1/WEB-AUTH/WEB-2/WEB-PARALLEL-PLAYLIST chưa tick.
+
+Output để nghe (server 10.8.102.102:8081): EP01 playlist `PLJVKAfv…` `completed`; Ocean Girl Episode 01 (index 2) và Episode 02 (index 3) `completed`. Episode 01 đã dịch lại sau khi bổ sung glossary: lời bài hát chủ đề không còn bị lồng tiếng. Episode 02 còn lọt câu 27s "Love the wisdom, want the will…" (Whisper nghe khác Episode 01) → cần thêm chuỗi `skip` rồi "dịch lại & chạy tiếp". Glossary đang chép tay vào từng tập (bằng chứng cho ứng viên CP9 "glossary theo playlist"). Tập 6, 7 (Episode 05, 06) đã tải (`--download-only`). Nghe xong mới chọn hạng mục CP9.
 
 ## Next proposed action
 

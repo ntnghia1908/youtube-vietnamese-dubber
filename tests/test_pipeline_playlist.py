@@ -573,3 +573,51 @@ class TestParseItemSpec(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMultiWriter(PlaylistTestCase):
+    """WEB-PARALLEL-PLAYLIST: hai tiến trình cùng ghi playlist.json không mất cập nhật."""
+
+    def test_persist_entry_keeps_other_entries_from_disk(self) -> None:
+        from app.pipeline.playlist import _persist_entry
+
+        path = self.workspace / "playlist.json"
+        base = {"playlist_id": "P", "entries": [
+            {"index": 1, "video_id": "a", "title": "A", "url": "u", "status": "pending"},
+            {"index": 2, "video_id": "b", "title": "B", "url": "u", "status": "pending"},
+        ]}
+        path.write_text(json.dumps(base), encoding="utf-8")
+        # bản RAM của tiến trình này (stale với entry b)
+        state = json.loads(json.dumps(base))
+        mine = state["entries"][0]
+        mine.update(status="completed", downloaded=True, episode_dir="a__t")
+        # "tiến trình khác" ghi b giữa chừng
+        other = json.loads(path.read_text(encoding="utf-8"))
+        other["entries"][1].update(status="completed", episode_dir="b__t")
+        path.write_text(json.dumps(other), encoding="utf-8")
+
+        _persist_entry(path, state, mine)
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data["entries"][0]["status"], "completed")
+        self.assertEqual(data["entries"][0]["episode_dir"], "a__t")
+        self.assertEqual(data["entries"][1]["status"], "completed")
+        self.assertEqual(data["entries"][1]["episode_dir"], "b__t")
+        self.assertEqual(list(self.workspace.glob("*.tmp")), [])
+
+    def test_run_playlist_does_not_clobber_entry_written_by_other_process(self) -> None:
+        def run_dub(url, config, options, *, log, episode=None):
+            if url.endswith("vid001"):
+                # tiến trình khác hoàn tất tập 3 trong lúc tập 1 đang chạy
+                path = options.workspace / PLAYLIST_STATE_FILENAME
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data["entries"][2].update(status="completed", episode_dir="other_dir")
+                path.write_text(json.dumps(data), encoding="utf-8")
+            return _success_run_dub()(url, config, options, log=log, episode=episode)
+
+        self._patch(run_dub_mock=MagicMock(side_effect=run_dub))
+        result = self._run(PlaylistOptions(dub=self.dub_options, items=frozenset({1, 2})))
+
+        entries = self._read_state(result)["entries"]
+        self.assertEqual([e["status"] for e in entries], ["completed", "completed", "completed"])
+        self.assertEqual(entries[2]["episode_dir"], "other_dir")

@@ -25,7 +25,8 @@ import json
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +47,12 @@ from app.youtube.download import (
 from app.youtube.playlist import PlaylistInfo, fetch_playlist
 
 PLAYLIST_STATE_FILENAME = "playlist.json"
+PLAYLIST_LOCK_SUFFIX = ".lock"
+
+if os.name == "nt":  # pragma: no cover - nhánh Windows
+    import msvcrt
+else:
+    import fcntl
 
 # Field lưu trong playlist.json cho mỗi entry (đúng thứ tự trong ví dụ ở
 # spec cp-8.md, mục Artifact) — giữ nguyên khi merge với state cũ, trừ
@@ -142,9 +149,70 @@ def _now_iso() -> str:
 def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
     # Cùng mẫu app/synchronization/timing.py:_write_json_atomic — bị kill
     # giữa lúc ghi thì playlist.json cụt không được coi là "đã ghi xong".
-    tmp = path.with_name(path.name + ".tmp")
+    # Tên tmp theo pid: nhiều tiến trình (web chạy song song) ghi cùng lúc
+    # không dẫm lên file tmp của nhau (WEB-PARALLEL-PLAYLIST).
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
+
+
+@contextmanager
+def _state_file_lock(state_path: Path) -> Iterator[None]:
+    """Khoá liên tiến trình quanh read-modify-write ``playlist.json``.
+
+    ``threading.Lock`` chỉ đồng bộ các luồng trong MỘT tiến trình; web có thể
+    chạy hai job cùng playlist (khác tập) ở hai tiến trình, nên cần khoá file.
+    Thứ tự khoá: ``entries_lock`` rồi file lock, không bao giờ ngược lại.
+    """
+    lock_path = state_path.with_name(state_path.name + PLAYLIST_LOCK_SUFFIX)
+    with open(lock_path, "a+b") as handle:
+        if os.name == "nt":  # pragma: no cover - nhánh Windows
+            # msvcrt.locking khoá vùng byte đầu: file phải có >= 1 byte.
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:  # LK_LOCK tự thử 10 lần rồi mới raise — thử tiếp
+                    continue
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _persist_entry(state_path: Path, state: dict[str, Any], entry: dict[str, Any]) -> None:
+    """Ghi trạng thái MỘT tập mà không làm mất cập nhật của tiến trình khác.
+
+    Dưới file lock: đọc lại ``playlist.json`` từ đĩa, chỉ thay entry cùng
+    ``video_id`` (các field ``_CARRIED_FIELDS``), giữ nguyên entry khác như
+    đang có trên đĩa rồi ghi atomic.
+    """
+    with _state_file_lock(state_path):
+        on_disk = _read_state_data(state_path)
+        entries = list(on_disk["entries"]) if on_disk else [dict(e) for e in state["entries"]]
+        for i, raw in enumerate(entries):
+            if isinstance(raw, dict) and raw.get("video_id") == entry["video_id"]:
+                updated = dict(raw)
+                for field_name in _CARRIED_FIELDS:
+                    updated[field_name] = entry.get(field_name)
+                entries[i] = updated
+                break
+        else:
+            entries.append({k: entry.get(k) for k in ("index", "video_id", "title", "url", *_CARRIED_FIELDS)})
+        base = on_disk if on_disk else state
+        _write_json_atomic(state_path, {**base, "entries": entries})
 
 
 def _relative_posix(path: Path, base: Path) -> str:
@@ -164,13 +232,8 @@ def _output_exists(playlist_dir: Path, entry: dict[str, Any]) -> bool:
     return False
 
 
-def _load_state(path: Path) -> dict[str, dict[str, Any]] | None:
-    """Đọc ``playlist.json`` cũ (nếu có), trả về map ``video_id -> entry``.
-
-    Raise ``PlaylistError`` nếu file tồn tại nhưng hỏng — KHÔNG tự ghi đè,
-    để người dùng tự sửa hoặc xoá (mất tiến trình một playlist chạy hàng
-    giờ nếu tự động ghi đè oan).
-    """
+def _read_state_data(path: Path) -> dict[str, Any] | None:
+    """Đọc và kiểm tra ``playlist.json`` (nguyên dict). None nếu chưa có file."""
     if not path.exists():
         return None
     try:
@@ -185,6 +248,19 @@ def _load_state(path: Path) -> dict[str, dict[str, Any]] | None:
             f"{path}: thiếu trường 'entries' hoặc sai định dạng — sửa hoặc xoá file rồi chạy "
             "lại `playlist`."
         )
+    return data
+
+
+def _load_state(path: Path) -> dict[str, dict[str, Any]] | None:
+    """Đọc ``playlist.json`` cũ (nếu có), trả về map ``video_id -> entry``.
+
+    Raise ``PlaylistError`` nếu file tồn tại nhưng hỏng — KHÔNG tự ghi đè,
+    để người dùng tự sửa hoặc xoá (mất tiến trình một playlist chạy hàng
+    giờ nếu tự động ghi đè oan).
+    """
+    data = _read_state_data(path)
+    if data is None:
+        return None
     by_id: dict[str, dict[str, Any]] = {}
     for raw in data["entries"]:
         if isinstance(raw, dict) and raw.get("video_id"):
@@ -252,18 +328,21 @@ def run_playlist(
     playlist_dir.mkdir(parents=True, exist_ok=True)
     state_path = playlist_dir / PLAYLIST_STATE_FILENAME
 
-    old_by_id = _load_state(state_path)
-    merged_entries = _merge_entries(playlist_info, old_by_id, log)
+    # Đọc + merge + ghi lần đầu trong MỘT file lock, đọc lại file ngay trong
+    # lock (không dùng bản đọc trước lúc fetch mạng) để không ghi đè trạng
+    # thái job khác vừa cập nhật (WEB-PARALLEL-PLAYLIST).
+    with _state_file_lock(state_path):
+        old_by_id = _load_state(state_path)
+        merged_entries = _merge_entries(playlist_info, old_by_id, log)
+        state: dict[str, Any] = {
+            "playlist_id": playlist_info.playlist_id,
+            "title": playlist_info.title,
+            "url": url,
+            "fetched_at": _now_iso(),
+            "entries": merged_entries,
+        }
+        _write_json_atomic(state_path, state)
     by_index = {entry["index"]: entry for entry in merged_entries}
-
-    state: dict[str, Any] = {
-        "playlist_id": playlist_info.playlist_id,
-        "title": playlist_info.title,
-        "url": url,
-        "fetched_at": _now_iso(),
-        "entries": merged_entries,
-    }
-    _write_json_atomic(state_path, state)
 
     total = len(merged_entries)
     if options.items is None:
@@ -337,7 +416,7 @@ def run_playlist(
                         entry = by_index[idx]
                         entry["downloaded"] = False
                         entry["updated_at"] = _now_iso()
-                        _write_json_atomic(state_path, state)
+                        _persist_entry(state_path, state, entry)
                     log(f"[playlist-dl] {ep_tag} LỖI ({elapsed:.1f}s): {exc}")
                     continue
                 elapsed = time.monotonic() - started
@@ -350,7 +429,7 @@ def run_playlist(
                     # — nếu Ctrl+C ngay sau đó, lần chạy sau biết thư mục đã có.
                     entry["episode_dir"] = _relative_posix(episode_info.episode_dir, playlist_dir)
                     entry["updated_at"] = _now_iso()
-                    _write_json_atomic(state_path, state)
+                    _persist_entry(state_path, state, entry)
                 log(f"[playlist-dl] {ep_tag} xong ({elapsed:.1f}s)")
             except BaseException as exc:  # noqa: BLE001 — chuyển sang luồng chính raise lại
                 download_outcomes[idx] = exc
@@ -379,7 +458,7 @@ def run_playlist(
             entry["warnings"] = None
             entry["seconds"] = round(seconds, 1)
             entry["updated_at"] = _now_iso()
-            _write_json_atomic(state_path, state)
+            _persist_entry(state_path, state, entry)
         log(f"[{ep_tag}] LỖI ở stage {stage} — tiếp tục tập sau")
         episodes.append(
             EpisodeOutcome(
@@ -483,7 +562,7 @@ def run_playlist(
                     download_seconds.get(idx, 0.0) + sum(result.stage_seconds.values()), 1
                 )
                 entry["updated_at"] = _now_iso()
-                _write_json_atomic(state_path, state)
+                _persist_entry(state_path, state, entry)
             episodes.append(
                 EpisodeOutcome(
                     index=idx, video_id=entry["video_id"], title=entry["title"],

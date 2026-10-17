@@ -26,7 +26,7 @@ import sys
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -95,11 +95,15 @@ def job_targets(
     command: list[str],
     *,
     workspace: Path | None = None,
+    index_map: Mapping[int, str] | None = None,
 ) -> frozenset[str]:
-    """Các "đích" job sẽ ghi vào; hai job giao nhau khác rỗng thì xung đột.
+    """Các "đích" job sẽ ghi vào; xung đột xét bằng ``targets_conflict``.
 
-    Bảo thủ có chủ ý: job ``dub`` video X và tập X trong một playlist bị coi là
-    xung đột dù thư mục khác nhau. Thuần, không đọc đĩa.
+    Đích: ``video:<id>`` (một tập/video), ``in-playlist:<L>`` (job chỉ đụng
+    vài tập của playlist L, chỉ để chạm với job cả playlist), ``playlist:<L>``
+    (cả playlist). Bảo thủ có chủ ý: job ``dub`` video X và tập X trong một
+    playlist coi là xung đột dù thư mục khác nhau. Thuần, không đọc đĩa:
+    ``index_map`` (index -> video_id, từ ``playlist.json``) do bên gọi đưa vào.
     """
     if kind == "dub":
         vid = _video_id(request.get("url") or "")
@@ -107,7 +111,20 @@ def job_targets(
     if kind == "playlist":
         query = parse_qs(urlparse((request.get("url") or "").strip()).query)
         list_id = query.get("list", [""])[0]
-        return frozenset({f"playlist:{list_id}"}) if list_id else frozenset()
+        if not list_id:
+            return frozenset()
+        whole = frozenset({f"playlist:{list_id}"})
+        items = request.get("items")
+        if not items or not index_map:
+            return whole
+        try:
+            indexes = parse_item_spec(items)
+        except PlaylistError:
+            return whole
+        video_ids = [index_map.get(i) for i in indexes]
+        if not indexes or not all(video_ids):
+            return whole  # có index không map được -> bảo thủ, khoá cả playlist
+        return frozenset({f"video:{v}" for v in video_ids} | {f"in-playlist:{list_id}"})
     if kind == "glossary":
         # build_command đặt thư mục tập ở command[4]. Tên thư mục: <id>__<title>.
         episode_dir = Path(command[4])
@@ -117,9 +134,40 @@ def job_targets(
         # (gọi thuần) thì dựa vào tên cha có dạng "<id>__<title>".
         in_playlist = parent != workspace if workspace is not None else "__" in parent.name
         if in_playlist:
-            targets.add(f"playlist:{parent.name.split('__', 1)[0]}")
+            targets.add(f"in-playlist:{parent.name.split('__', 1)[0]}")
         return frozenset(targets)
     return frozenset()
+
+
+def targets_conflict(a: frozenset[str], b: frozenset[str]) -> bool:
+    """Hai job không được chạy cùng lúc: giao nhau, hoặc một bên khoá cả playlist L
+    còn bên kia đụng playlist L (cả playlist hoặc vài tập)."""
+    # `in-playlist:` chỉ là nhãn để chạm với `playlist:`, hai bên cùng nhãn không phải xung đột.
+    if any(not t.startswith("in-playlist:") for t in a & b):
+        return True
+    for mine, other in ((a, b), (b, a)):
+        for t in mine:
+            if t.startswith("playlist:"):
+                list_id = t.split(":", 1)[1]
+                if f"playlist:{list_id}" in other or f"in-playlist:{list_id}" in other:
+                    return True
+    return False
+
+
+def read_playlist_index_map(workspace: Path, list_id: str) -> dict[int, str]:
+    """index -> video_id từ ``<workspace>/<list_id>__*/playlist.json``; lỗi -> ``{}``
+    (bảo thủ: job sẽ khoá cả playlist)."""
+    for state_path in sorted(workspace.glob(f"{list_id}__*/playlist.json")):
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+            return {
+                int(e["index"]): str(e["video_id"])
+                for e in data["entries"]
+                if isinstance(e, dict) and e.get("video_id") and e.get("index") is not None
+            }
+        except (OSError, ValueError, KeyError, TypeError):
+            return {}
+    return {}
 
 
 def validate_request(req: JobRequest) -> None:
@@ -530,23 +578,27 @@ class JobManager:
     # ---- worker ----------------------------------------------------------
 
     def _targets_of(self, job: dict[str, Any]) -> frozenset[str]:
+        index_map = None
+        request = job["request"]
+        if job["kind"] == "playlist" and request.get("items"):
+            list_id = parse_qs(urlparse((request.get("url") or "").strip()).query).get("list", [""])[0]
+            if list_id:
+                index_map = read_playlist_index_map(self._workspace, list_id)
         return job_targets(
-            job["kind"], job["request"], job["command"], workspace=self._workspace
+            job["kind"], request, job["command"], workspace=self._workspace, index_map=index_map
         )
 
     def _next_queued(self) -> str | None:
         with self._cond:
             while not self._stop_event.is_set():
-                busy: set[str] = set()
-                for _, targets in self._running.values():
-                    busy |= targets
+                busy = [targets for _, targets in self._running.values()]
                 for job_id in list(self._queue):
                     job = self._read(job_id)
                     if job is None or job["status"] != "queued":
                         self._queue.remove(job_id)  # đã bị hủy khi còn queued
                         continue
                     targets = self._targets_of(job)
-                    if targets & busy:
+                    if any(targets_conflict(targets, b) for b in busy):
                         continue  # xung đột: giữ nguyên vị trí, job sau được vượt lên
                     self._queue.remove(job_id)
                     self._running[job_id] = (None, targets)

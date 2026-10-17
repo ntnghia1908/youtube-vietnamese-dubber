@@ -80,6 +80,10 @@ chạy), `result` luôn `None`. `status` trong `playlist.json` **không đổi**
 sau một lần `download_only` thành công (không tự chuyển `pending`, xem C5)
 — chỉ `downloaded`/`episode_dir` được cập nhật.
 
+### A5. Sửa đổi 2026-10-17 (WEB-PARALLEL-PLAYLIST): `playlist.json` hỗ trợ nhiều writer
+
+Nhiều tiến trình `run_playlist` có thể cùng ghi một `playlist.json` (web chạy 2 job khác tập cùng playlist). Mỗi lần ghi là read-modify-write dưới `fcntl.flock`/`msvcrt.locking` trên `playlist.json.lock`: đọc lại file từ đĩa, chỉ thay entry cùng `video_id`, giữ entry khác như trên đĩa. File tmp đặt theo pid (`playlist.json.<pid>.tmp`). Định dạng file không đổi. Người đọc khác (web) vẫn đọc file trực tiếp vì `os.replace` là atomic.
+
 ---
 
 ## B. Quyết định triển khai (SỬA ĐỔI 1 — luồng tải song song)
