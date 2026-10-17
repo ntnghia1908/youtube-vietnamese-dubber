@@ -1,0 +1,26 @@
+{
+  "frameworkVersion": "4.4",
+  "adapters": ["claude-code"],
+  "agents": {
+    "orchestrator": "claude-code"
+  },
+  "governance": {
+    "taskAuthorization": "boundary",
+    "maxParallelImplementers": 1
+  },
+  "requiredFiles": [
+    "docs/IMPLEMENTATION_PLAN.md",
+    "docs/SETUP.md",
+    ".claude/commands/spec.md",
+    ".claude/commands/implement.md"
+  ],
+  "requiredTokens": {
+    "docs/ai/project-profile.md": [
+      "Test pass KHÔNG chứng minh checkpoint đã xong",
+      "Mọi stage phải resume được",
+      "Không hard-code"
+    ]
+  },
+  "taskDir": "docs/tasks",
+  "decisionDir": "docs/adr"
+}

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ntnghia1908/ai-dev-framework/adapter-descriptor.schema.json",
+  "title": "AI Dev Framework Adapter Descriptor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "displayName", "roles", "execution", "capabilities"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "displayName": { "type": "string", "minLength": 1 },
+    "roles": {
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 1,
+      "items": { "enum": ["product", "orchestrator", "implementer"] }
+    },
+    "execution": {
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 1,
+      "items": { "enum": ["interactive", "local", "ci"] }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readRepository", "writeRepository", "shell", "git", "pullRequest"],
+      "properties": {
+        "readRepository": { "type": "boolean" },
+        "writeRepository": { "type": "boolean" },
+        "shell": { "type": "boolean" },
+        "git": { "type": "boolean" },
+        "pullRequest": { "type": "boolean" }
+      }
+    }
+  }
+}

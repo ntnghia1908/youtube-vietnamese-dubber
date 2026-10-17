@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1",
+  "id": "claude-code",
+  "displayName": "Claude Code",
+  "roles": ["orchestrator", "implementer"],
+  "execution": ["interactive", "local", "ci"],
+  "capabilities": {
+    "readRepository": true,
+    "writeRepository": true,
+    "shell": true,
+    "git": true,
+    "pullRequest": true
+  }
+}
