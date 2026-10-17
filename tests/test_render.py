@@ -29,8 +29,10 @@ from app.audio.render import (
     build_voice_track,
     decode_pcm,
     mix_video,
+    original_volume_expr,
     plan_placements,
     render_episode,
+    skip_intervals,
 )
 
 SR = 100  # sample rate giả cho test
@@ -335,6 +337,29 @@ class TestMixVideo(unittest.TestCase):
         self.assertEqual(self.dst.read_bytes(), b"mp4-bytes")
         self.assertFalse((self.ep / "output_vi.tmp.mp4").exists())
 
+    def test_filter_has_eval_frame_only_with_intervals(self) -> None:
+        cmds: list[str] = []
+
+        def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+            cmds.append(cmd[cmd.index("-filter_complex") + 1])
+            Path(cmd[-1]).write_bytes(b"x")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with (
+            patch("app.audio.render.shutil.which", return_value="ffmpeg"),
+            patch("app.audio.render.subprocess.run", side_effect=fake_run),
+        ):
+            self._mix()
+            mix_video(
+                self.ep / "source.mp4", self.ep / VOICE_TRACK_FILENAME, self.dst,
+                original_volume=0.3, speech_volume=1.0,
+                skip_intervals=[(0.0, 63.0)], skip_original_volume=1.0, skip_fade=0.5,
+            )
+        self.assertIn("aformat=channel_layouts=stereo,volume=0.3000[bg]", cmds[0])
+        self.assertNotIn("eval=frame", cmds[0])
+        self.assertIn(":eval=frame[bg]", cmds[1])
+        self.assertIn("clip(", cmds[1])
+
     def test_ffmpeg_error_raises_and_removes_tmp(self) -> None:
         def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
             Path(cmd[-1]).write_bytes(b"partial")
@@ -354,6 +379,56 @@ class TestMixVideo(unittest.TestCase):
         with patch("app.audio.render.shutil.which", return_value=None):
             with self.assertRaisesRegex(RenderError, "ffmpeg"):
                 self._mix()
+
+
+class TestSkipIntervals(unittest.TestCase):
+    @staticmethod
+    def _silent(start: float, end: float) -> dict[str, Any]:
+        return {"id": 1, "start": start, "end": end, "status": "silent", "audio": None}
+
+    def test_empty_and_non_silent_ignored(self) -> None:
+        self.assertEqual(skip_intervals([], duration=100.0), [])
+        segs = [_seg(1, 0.0, 1.0), _seg(2, 5.0, None, status="missing", audio=None)]
+        self.assertEqual(skip_intervals(segs, duration=100.0), [])
+
+    def test_merges_adjacent_and_close_but_not_far(self) -> None:
+        segs = [self._silent(10, 12), self._silent(0, 5), self._silent(5, 8),
+                self._silent(8.3, 9), self._silent(20, 25)]
+        # 0-5,5-8,8.3-9 (cách 0.3 < 0.5) gộp; 10-12 cách 1.0 >= 0.5 thì tách.
+        self.assertEqual(
+            skip_intervals(segs, duration=100.0), [(0.0, 9.0), (10.0, 12.0), (20.0, 25.0)]
+        )
+
+    def test_clipped_to_duration(self) -> None:
+        segs = [self._silent(-2, 3), self._silent(18, 30), self._silent(40, 50)]
+        self.assertEqual(skip_intervals(segs, duration=20.0), [(0.0, 3.0), (18.0, 20.0)])
+
+
+class TestOriginalVolumeExpr(unittest.TestCase):
+    def test_no_intervals_is_constant(self) -> None:
+        self.assertEqual(original_volume_expr([], base=0.3, skip=1.0, fade=0.5), "0.3000")
+
+    def test_zero_fade_uses_between(self) -> None:
+        expr = original_volume_expr([(10.0, 20.0)], base=0.3, skip=1.0, fade=0.0)
+        self.assertIn("between(t\\,10\\,20)", expr)
+        self.assertNotIn("clip", expr)
+
+    def test_fade_uses_clip_and_escapes_commas(self) -> None:
+        expr = original_volume_expr([(10.0, 20.0), (40.0, 50.0)], base=0.3, skip=1.0, fade=0.5)
+        self.assertIn("clip(", expr)
+        self.assertIn("max(", expr)
+        self.assertIn("(t-9.5)/0.5", expr)
+        self.assertIn("(20.5-t)/0.5", expr)
+        self.assertTrue(expr.startswith("0.3000+0.7000*"))
+        # Mọi dấu phẩy đều có backslash đứng trước.
+        self.assertEqual(expr.count(","), expr.count("\\,"))
+
+    def test_per_interval_fades_narrow_one_side(self) -> None:
+        expr = original_volume_expr(
+            [(0.0, 63.0)], base=0.3, skip=1.0, fade=0.5, fades=[(0.0, 0.2)]
+        )
+        self.assertIn("gte(t\\,0)", expr)
+        self.assertIn("(63.2-t)/0.2", expr)
 
 
 class _RenderTestBase(unittest.TestCase):
@@ -448,7 +523,9 @@ class TestRenderEpisode(_RenderTestBase):
         self.assertEqual(placements[1]["placed_at"], 3.5)
         self.assertEqual(placements[1]["shift"], 0.5)
         self.assertEqual(
-            data["output"]["params"], {"original_volume": 0.3, "speech_volume": 1.0}
+            data["output"]["params"],
+            {"original_volume": 0.3, "speech_volume": 1.0, "skip_original_volume": 1.0,
+             "skip_fade_seconds": 0.5, "skip_intervals": [[7.0, 9.0]]},
         )
         self.assertIn("fingerprint", data["output"])
 
@@ -741,3 +818,52 @@ class TestRenderEpisode(_RenderTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRenderSkipVolume(_RenderTestBase):
+    def test_intervals_passed_to_mix_and_recorded(self) -> None:
+        self._render()
+        kwargs = self.mix.call_args.kwargs
+        self.assertEqual(kwargs["skip_intervals"], [(7.0, 9.0)])
+        self.assertEqual(kwargs["skip_original_volume"], 1.0)
+        # Câu id 3 kết thúc 6.5 -> fade trái bị thu còn 0.5; không có câu sau -> fade phải đủ.
+        self.assertEqual(kwargs["skip_fades"], [(0.5, 0.5)])
+        self.assertEqual(self._render_json()["output"]["params"]["skip_intervals"], [[7.0, 9.0]])
+
+    def test_fade_narrowed_by_neighbouring_speech(self) -> None:
+        # id 3 đặt ở 5.5 dài 1.0 -> kết thúc 6.5; silent bắt đầu 6.7 -> khoảng trống 0.2.
+        self.segments[3]["start"] = 6.7
+        self.segments[3]["end"] = 9.0
+        self._write_normalized()
+        self._render()
+        left, _right = self.mix.call_args.kwargs["skip_fades"][0]
+        self.assertAlmostEqual(left, 0.2)
+
+    def test_equal_volumes_disable_feature(self) -> None:
+        self._render(skip_original_volume=0.3)
+        kwargs = self.mix.call_args.kwargs
+        self.assertEqual(kwargs["skip_intervals"], [])
+        self.assertEqual(self._render_json()["output"]["params"]["skip_intervals"], [])
+
+    def test_changing_skip_param_remuxes_without_rebuilding_voice(self) -> None:
+        self._render()
+        voice_fp = self._render_json()["voice_track"]["fingerprint"]
+        out_fp = self._render_json()["output"]["fingerprint"]
+        self._reset_mocks()
+
+        result = self._render(skip_original_volume=0.8)
+
+        self.assertTrue(result.voice_track_skipped)
+        self.assertFalse(result.output_skipped)
+        self.decode.assert_not_called()
+        self.assertEqual(self.mix.call_count, 1)
+        data = self._render_json()
+        self.assertEqual(data["voice_track"]["fingerprint"], voice_fp)
+        self.assertNotEqual(data["output"]["fingerprint"], out_fp)
+
+    def test_changing_fade_remuxes(self) -> None:
+        self._render()
+        self._reset_mocks()
+        result = self._render(skip_fade=1.0)
+        self.assertTrue(result.voice_track_skipped)
+        self.assertFalse(result.output_skipped)

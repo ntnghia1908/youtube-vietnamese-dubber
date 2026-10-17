@@ -130,6 +130,81 @@ def plan_placements(segments: list[dict[str, Any]], *, max_shift: float) -> list
     return placements
 
 
+def skip_intervals(
+    segments: list[dict[str, Any]], *, min_gap: float = 0.5, duration: float
+) -> list[tuple[float, float]]:
+    """Khoảng [start, end] (giây) của segment ``status == "silent"`` (không lồng tiếng).
+
+    Sắp theo start, gộp các khoảng liền/chồng/cách nhau < ``min_gap`` (Whisper
+    hay cắt một bài hát thành nhiều segment sát nhau; không gộp thì volume
+    sẽ nhấp nhô giữa chúng), cắt vào [0, duration]. Hàm thuần, không I/O.
+    """
+    raw: list[tuple[float, float]] = []
+    for seg in segments:
+        if seg.get("status") != "silent":
+            continue
+        if not _is_number(seg.get("start")) or not _is_number(seg.get("end")):
+            continue
+        a = max(0.0, float(seg["start"]))
+        b = min(float(duration), float(seg["end"]))
+        if b > a:
+            raw.append((a, b))
+    raw.sort()
+    merged: list[tuple[float, float]] = []
+    for a, b in raw:
+        if merged and a - merged[-1][1] < min_gap:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def _num(value: float) -> str:
+    # Làm tròn 3 chữ số, bỏ số 0 thừa cho biểu thức ngắn gọn.
+    text = f"{value:.3f}".rstrip("0").rstrip(".")
+    return text if text and text != "-0" else "0"
+
+
+def original_volume_expr(
+    intervals: list[tuple[float, float]],
+    *,
+    base: float,
+    skip: float,
+    fade: float,
+    fades: list[tuple[float, float]] | None = None,
+) -> str:
+    """Biểu thức cho filter ffmpeg ``volume=...:eval=frame`` (volume audio gốc theo thời gian).
+
+    ``volume = base + (skip - base) * w(t)``, với w(t) = max theo từng khoảng
+    [a, b] của ``clip(min((t-(a-fl))/fl, ((b+fr)-t)/fr), 0, 1)``. Fade nằm
+    NGOÀI khoảng (tăng từ ``a-fl``, về mức thấp ở ``b+fr``) để chính đoạn
+    không lồng tiếng luôn đủ to ngay từ đầu. ``fades`` (tuỳ chọn, mỗi khoảng
+    một cặp ``(fl, fr)``) cho phép thu hẹp fade để không chồng lên câu có
+    lồng tiếng kề bên; mặc định mọi fade = ``fade``. Fade 0 phía nào thì phía
+    đó chuyển ngay. Không có khoảng -> hằng ``base`` (giống hệt trước CP9-B).
+    Dấu phẩy escape ``\\,`` vì nằm trong filtergraph.
+    """
+    if not intervals:
+        return f"{base:.4f}"
+    terms: list[str] = []
+    for i, (a, b) in enumerate(intervals):
+        fl, fr = fades[i] if fades is not None else (fade, fade)
+        if fl <= 0 and fr <= 0:
+            terms.append(f"between(t\\,{_num(a)}\\,{_num(b)})")
+            continue
+        left = (
+            f"(t-{_num(a - fl)})/{_num(fl)}" if fl > 0 else f"gte(t\\,{_num(a)})"
+        )
+        right = (
+            f"({_num(b + fr)}-t)/{_num(fr)}" if fr > 0 else f"lte(t\\,{_num(b)})"
+        )
+        terms.append(f"clip(min({left}\\,{right})\\,0\\,1)")
+    w = terms[0]
+    for term in terms[1:]:
+        w = f"max({w}\\,{term})"
+    return f"{base:.4f}+{(skip - base):.4f}*{w}"
+
+
 def decode_pcm(path: Path, sample_rate: int) -> bytes:
     """Giải mã ``path`` ra PCM s16le mono ``sample_rate`` Hz (bytes thô, không header).
 
@@ -250,6 +325,10 @@ def mix_video(
     *,
     original_volume: float,
     speech_volume: float,
+    skip_intervals: list[tuple[float, float]] = (),  # type: ignore[assignment]
+    skip_original_volume: float = 1.0,
+    skip_fade: float = 0.5,
+    skip_fades: list[tuple[float, float]] | None = None,
 ) -> None:
     """Mux ``source`` (video + audio gốc) với ``voice_track`` thành ``dst`` bằng một lệnh ffmpeg.
 
@@ -261,6 +340,8 @@ def mix_video(
     - ``alimiter`` chống clip khi cộng hai track.
     - ``duration=first``: kết thúc theo audio gốc (voice track dài hơn video thì bị cắt).
     - ``-c:v copy``: không encode lại video (nhanh, không mất chất lượng).
+    - ``skip_intervals`` (CP9-B): có khoảng thì volume audio gốc đổi theo thời
+      gian (``eval=frame``), to ở các khoảng đó; không có thì filter y hệt cũ.
 
     Ghi ra ``dst`` kèm hậu tố ``.tmp.mp4`` (đuôi ``.mp4`` để ffmpeg chọn đúng
     muxer) rồi ``os.replace``; lỗi thì xoá tmp.
@@ -273,8 +354,19 @@ def mix_video(
         )
     tmp_path = dst.with_name(dst.stem + ".tmp.mp4")
     dst.parent.mkdir(parents=True, exist_ok=True)
+    if skip_intervals:
+        expr = original_volume_expr(
+            list(skip_intervals),
+            base=original_volume,
+            skip=skip_original_volume,
+            fade=skip_fade,
+            fades=skip_fades,
+        )
+        bg_volume = f"volume={expr}:eval=frame"
+    else:
+        bg_volume = f"volume={original_volume:.4f}"
     filter_complex = (
-        f"[0:a]aformat=channel_layouts=stereo,volume={original_volume:.4f}[bg];"
+        f"[0:a]aformat=channel_layouts=stereo,{bg_volume}[bg];"
         f"[1:a]pan=stereo|c0=c0|c1=c0,volume={speech_volume:.4f}[fg];"
         "[bg][fg]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[aout]"
     )
@@ -329,14 +421,20 @@ def _output_fingerprint(
     *,
     original_volume: float,
     speech_volume: float,
+    skip_original_volume: float,
+    skip_fade_seconds: float,
+    skip_intervals: list[list[float]],
     source_stat: os.stat_result,
 ) -> str:
     return _sha256_of(
         {
-            "v": 1,
+            "v": 2,
             "voice": voice_fingerprint,
             "original_volume": original_volume,
             "speech_volume": speech_volume,
+            "skip_original_volume": skip_original_volume,
+            "skip_fade_seconds": skip_fade_seconds,
+            "skip_intervals": skip_intervals,
             "source_size": source_stat.st_size,
             "source_mtime_ns": source_stat.st_mtime_ns,
         }
@@ -396,6 +494,8 @@ def render_episode(
     original_volume: float = 0.30,
     speech_volume: float = 1.0,
     max_shift: float = 1.0,
+    skip_original_volume: float = 1.0,
+    skip_fade: float = 0.5,
     allow_missing: bool = False,
     force: bool = False,
     log: Callable[[str], None] = print,
@@ -411,6 +511,8 @@ def render_episode(
     original_volume = float(original_volume)
     speech_volume = float(speech_volume)
     max_shift = float(max_shift)
+    skip_original_volume = float(skip_original_volume)
+    skip_fade = float(skip_fade)
     # Đọc lúc gọi (không phải lúc import) để test patch được hằng số này.
     sample_rate = VOICE_SAMPLE_RATE_HZ
 
@@ -467,6 +569,29 @@ def render_episode(
             f"({source_duration:.2f}s) — phần thừa bị cắt ở {OUTPUT_FILENAME}."
         )
 
+    # CP9-B: đoạn không lồng tiếng giữ audio gốc to. Bằng original_volume thì
+    # không có gì để đổi -> bỏ khoảng, giữ nguyên filter cũ.
+    if abs(skip_original_volume - original_volume) < 1e-9:
+        intervals: list[tuple[float, float]] = []
+    else:
+        intervals = skip_intervals(segments, duration=source_duration)
+    # Thu hẹp fade để không chồng lên câu có lồng tiếng kề bên: fade mỗi phía
+    # tối đa bằng khoảng trống tới câu (đã đặt) gần nhất phía đó.
+    fades: list[tuple[float, float]] = []
+    for a, b in intervals:
+        prev_end = max(
+            (p.placed_at + p.audio_duration for p in placements
+             if p.placed_at + p.audio_duration <= a + _EPSILON_SECONDS),
+            default=0.0,
+        )
+        next_start = min(
+            (p.placed_at for p in placements if p.placed_at >= b - _EPSILON_SECONDS),
+            default=math.inf,
+        )
+        fades.append((max(0.0, min(skip_fade, a - prev_end)),
+                      max(0.0, min(skip_fade, next_start - b))))
+    intervals_json = [[_round3(a), _round3(b)] for a, b in intervals]
+
     # Dọn file tạm sót lại do lần chạy trước bị kill giữa chừng.
     voice_track_path.with_name(voice_track_path.stem + ".tmp.wav").unlink(missing_ok=True)
     output_path.with_name(output_path.stem + ".tmp.mp4").unlink(missing_ok=True)
@@ -483,6 +608,9 @@ def render_episode(
         voice_fp,
         original_volume=original_volume,
         speech_volume=speech_volume,
+        skip_original_volume=skip_original_volume,
+        skip_fade_seconds=skip_fade,
+        skip_intervals=intervals_json,
         source_stat=source_path.stat(),
     )
 
@@ -552,17 +680,33 @@ def render_episode(
             doc["output"] = old_output
             _write_json_atomic(render_path, doc)
     else:
-        log(f"[render] mux {OUTPUT_FILENAME} (original {original_volume:g}, speech {speech_volume:g})...")
+        skip_note = (
+            f", skip {skip_original_volume:g} ở {len(intervals)} đoạn" if intervals else ""
+        )
+        log(
+            f"[render] mux {OUTPUT_FILENAME} (original {original_volume:g}, "
+            f"speech {speech_volume:g}{skip_note})..."
+        )
         mix_video(
             source_path,
             voice_track_path,
             output_path,
             original_volume=original_volume,
             speech_volume=speech_volume,
+            skip_intervals=intervals,
+            skip_original_volume=skip_original_volume,
+            skip_fade=skip_fade,
+            skip_fades=fades,
         )
         doc["output"] = {
             "fingerprint": output_fp,
-            "params": {"original_volume": original_volume, "speech_volume": speech_volume},
+            "params": {
+                "original_volume": original_volume,
+                "speech_volume": speech_volume,
+                "skip_original_volume": skip_original_volume,
+                "skip_fade_seconds": skip_fade,
+                "skip_intervals": intervals_json,
+            },
             "duration": _round3(source_duration),
         }
         _write_json_atomic(render_path, doc)

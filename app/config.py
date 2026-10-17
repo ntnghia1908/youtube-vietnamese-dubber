@@ -98,6 +98,12 @@ class MixingConfig:
     speech_volume: float = 1.0
     # Số giây dời tối đa một câu khi câu trước tràn slot. 0 = không dời (đè).
     max_shift_seconds: float = 1.0
+    # CP9-B: volume audio gốc ở đoạn không lồng tiếng (segment ``silent``, vd
+    # câu ``skip`` của glossary như bài hát mở đầu) — để nhạc gốc nghe rõ thay
+    # vì bị hạ xuống ``original_volume``. Bằng ``original_volume`` = tắt tính năng.
+    skip_original_volume: float = 1.0
+    # Thời gian chuyển mức volume (giây) quanh đoạn đó, để không bị giật. 0 = chuyển ngay.
+    skip_fade_seconds: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -164,6 +170,8 @@ _MIXING_TYPES: dict[str, tuple[type | None, ...]] = {
     "original_volume": (int, float),
     "speech_volume": (int, float),
     "max_shift_seconds": (int, float),
+    "skip_original_volume": (int, float),
+    "skip_fade_seconds": (int, float),
 }
 _PIPELINE_TYPES: dict[str, tuple[type | None, ...]] = {
     "repair_rounds": (int,),
@@ -230,6 +238,20 @@ def validate_mixing(
     if max_shift_seconds < 0.0:
         raise ConfigError(
             f"`mixing.max_shift_seconds` không được âm (đang là {max_shift_seconds})."
+        )
+
+
+def validate_skip_mixing(skip_original_volume: float, skip_fade_seconds: float) -> None:
+    """Kiểm tra tham số volume đoạn không lồng tiếng (CP9-B): ``0 <= skip_original_volume <= 1``,
+    ``0 <= skip_fade_seconds <= 3``. Cùng kiểu thông báo với ``validate_mixing``."""
+    if not 0.0 <= skip_original_volume <= 1.0:
+        raise ConfigError(
+            "`mixing.skip_original_volume` phải trong khoảng 0.0–1.0 "
+            f"(đang là {skip_original_volume})."
+        )
+    if not 0.0 <= skip_fade_seconds <= 3.0:
+        raise ConfigError(
+            f"`mixing.skip_fade_seconds` phải trong khoảng 0.0–3.0 (đang là {skip_fade_seconds})."
         )
 
 
@@ -366,6 +388,7 @@ def parse_config(data: Any) -> AppConfig:
 
     mixing = MixingConfig(**_check_section(data.get("mixing"), "mixing", _MIXING_TYPES))
     validate_mixing(mixing.original_volume, mixing.speech_volume, mixing.max_shift_seconds)
+    validate_skip_mixing(mixing.skip_original_volume, mixing.skip_fade_seconds)
     kwargs["mixing"] = mixing
 
     pipeline = PipelineConfig(**_check_section(data.get("pipeline"), "pipeline", _PIPELINE_TYPES))

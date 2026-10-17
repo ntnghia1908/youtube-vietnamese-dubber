@@ -738,6 +738,8 @@ def _cmd_render(args: argparse.Namespace, config: AppConfig) -> int:
             original_volume=original_volume,
             speech_volume=speech_volume,
             max_shift=max_shift,
+            skip_original_volume=config.mixing.skip_original_volume,
+            skip_fade=config.mixing.skip_fade_seconds,
             allow_missing=args.allow_missing,
             force=args.force,
             log=lambda message: print(message, flush=True),

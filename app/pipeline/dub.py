@@ -406,6 +406,8 @@ def run_dub(
             original_volume=options.original_volume,
             speech_volume=config.mixing.speech_volume,
             max_shift=config.mixing.max_shift_seconds,
+            skip_original_volume=config.mixing.skip_original_volume,
+            skip_fade=config.mixing.skip_fade_seconds,
             allow_missing=options.allow_missing,
             force=options.force,
             log=log,

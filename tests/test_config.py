@@ -196,6 +196,27 @@ class TestParseConfig(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ConfigError):
                 parse_config({"mixing": {"speech_volume": value}})
 
+    def test_mixing_skip_defaults_and_values(self) -> None:
+        config = parse_config(None)
+        self.assertEqual(config.mixing.skip_original_volume, 1.0)
+        self.assertEqual(config.mixing.skip_fade_seconds, 0.5)
+        config = parse_config({"mixing": {"skip_original_volume": 0.8, "skip_fade_seconds": 0}})
+        self.assertEqual(config.mixing.skip_original_volume, 0.8)
+        self.assertEqual(config.mixing.skip_fade_seconds, 0)
+
+    def test_mixing_skip_rejects_bad_values(self) -> None:
+        cases = [
+            {"skip_original_volume": -0.1},
+            {"skip_original_volume": 1.1},
+            {"skip_fade_seconds": -1},
+            {"skip_fade_seconds": 3.5},
+            {"skip_original_volume": "1.0"},
+            {"skip_fade_seconds": True},
+        ]
+        for case in cases:
+            with self.subTest(case=case), self.assertRaises(ConfigError):
+                parse_config({"mixing": case})
+
     def test_mixing_rejects_negative_max_shift(self) -> None:
         with self.assertRaises(ConfigError):
             parse_config({"mixing": {"max_shift_seconds": -0.5}})
