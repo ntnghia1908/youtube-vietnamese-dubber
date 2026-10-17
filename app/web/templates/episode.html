@@ -23,35 +23,43 @@
     <div>
       <button type="button" id="use-output" {% if not has_output %}disabled{% endif %}>Bản lồng tiếng</button>
       <button type="button" id="use-source" {% if not has_source %}disabled{% endif %}>Bản gốc</button>
+      <button type="button" id="toggle-pane" class="push-right" aria-controls="segments-pane" aria-expanded="true">Ẩn phụ đề</button>
     </div>
   </div>
 {% endif %}
 {% if not has_output %}<p class="warn">Chưa có <code>output_vi.mp4</code>{% if has_source %} — đang hiện bản gốc{% endif %}.</p>{% endif %}
 {% if not has_source and not has_output %}<p class="warn">Chưa có video nào.</p>{% endif %}
 </div>
-<div class="segments-pane">
-<div class="toolbar">
-<label><input type="checkbox" id="only-too-long"> Chỉ hiện câu too_long</label>
-<label><input type="checkbox" id="auto-scroll" checked> Tự cuộn theo câu đang phát</label>
+<div class="segments-pane" id="segments-pane">
+<div class="pane-head">
+  <div class="seg-mode" role="group" aria-label="Kiểu phụ đề">
+    <button type="button" data-mode="both" aria-pressed="true">Song ngữ</button>
+    <button type="button" data-mode="vi" aria-pressed="false">Tiếng Việt</button>
+    <button type="button" data-mode="en" aria-pressed="false">Gốc</button>
+  </div>
+  <div class="pane-opts">
+    <label><input type="checkbox" id="auto-scroll" checked> Tự cuộn</label>
+    <label><input type="checkbox" id="only-too-long"> Chỉ too_long</label>
+  </div>
 </div>
-<div id="segments-box">
-<table id="segments">
-  <thead><tr><th>#</th><th>Thời gian</th><th>Gốc</th><th>Bản dịch</th><th>Status</th><th>Tempo</th></tr></thead>
-  <tbody>
+<div id="segments-box" data-mode="both">
+<ol id="segments">
   {% for s in segments %}
-    <tr data-start="{{ s.start }}" data-end="{{ s.end }}" data-status="{{ s.status or '' }}">
-      <td data-label="#">{{ s.id }}</td>
-      <td data-label="Thời gian">{{ s.start | duration }}</td>
-      <td data-label="Gốc">{{ s.source_text }}</td>
-      <td data-label="Dịch">{{ s.translated_text or "" }}</td>
-      <td data-label="Status">{{ s.status or "" }}</td>
-      <td data-label="Tempo">{{ s.tempo if s.tempo is not none else "" }}</td>
-    </tr>
+    <li class="cue" data-start="{{ s.start }}" data-end="{{ s.end }}" data-status="{{ s.status or '' }}">
+      <div class="cue-meta">
+        <span class="cue-time">{{ s.start | duration }}</span>
+        <span class="cue-id">#{{ s.id }}</span>
+        {% if s.status == "too_long" %}<span class="cue-flag">too_long</span>{% endif %}
+        {% if s.tempo is not none %}<span class="cue-tempo">×{{ s.tempo }}</span>{% endif %}
+      </div>
+      {% if s.translated_text %}<p class="cue-vi">{{ s.translated_text }}</p>
+      {% else %}<p class="cue-vi cue-none">không lồng tiếng</p>{% endif %}
+      <p class="cue-en" lang="en">{{ s.source_text }}</p>
+    </li>
   {% else %}
-    <tr><td colspan="6">Chưa có transcript.</td></tr>
+    <li class="cue-empty">Chưa có transcript.</li>
   {% endfor %}
-  </tbody>
-</table>
+</ol>
 </div>
 </div>
 </div>

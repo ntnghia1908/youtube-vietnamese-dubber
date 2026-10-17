@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Dubber{% endblock %} — YouTube Vietnamese Dubber</title>
   <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/theme.js"></script>
 </head>
 <body>
   <nav>
@@ -12,9 +13,12 @@
     {% set path = request.url.path %}
     <a href="/jobs"{% if path.startswith("/jobs") %} aria-current="page"{% endif %}>Jobs</a>
     <a href="/library"{% if path == "/library" or path.startswith("/ep/") or path.startswith("/pl/") %} aria-current="page"{% endif %}>Thư viện</a>
-    {% if auth_enabled %}
-    <form method="post" action="/logout" class="nav-logout"><button type="submit">Đăng xuất</button></form>
-    {% endif %}
+    <div class="nav-right">
+      <button type="button" id="theme-toggle" class="nav-btn">☾ Tối</button>
+      {% if auth_enabled %}
+      <form method="post" action="/logout" class="nav-logout"><button type="submit" class="nav-btn">Đăng xuất</button></form>
+      {% endif %}
+    </div>
   </nav>
   <main>
     {% block content %}{% endblock %}

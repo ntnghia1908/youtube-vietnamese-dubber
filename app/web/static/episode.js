@@ -1,17 +1,42 @@
-// Trang episode: click câu -> tua, highlight câu đang phát, đổi output/source giữ thời điểm, lọc too_long.
+// Trang episode: click câu -> tua, highlight câu đang phát, đổi output/source giữ thời điểm,
+// lọc too_long, chọn kiểu phụ đề (song ngữ/Việt/gốc), ẩn/hiện khung phụ đề.
 (function () {
   const video = document.getElementById("video");
-  const rows = Array.from(document.querySelectorAll("#segments tr[data-start]"));
+  const rows = Array.from(document.querySelectorAll("#segments [data-start]"));
   const filter = document.getElementById("only-too-long");
   const box = document.getElementById("segments-box");
   const autoScroll = document.getElementById("auto-scroll");
-  // Nhớ lựa chọn tự cuộn theo trình duyệt; storage có thể bị chặn (private mode).
-  try {
-    if (localStorage.getItem("dubber.autoScroll") === "0") autoScroll.checked = false;
-  } catch (e) {}
-  autoScroll.addEventListener("change", () => {
-    try { localStorage.setItem("dubber.autoScroll", autoScroll.checked ? "1" : "0"); } catch (e) {}
-  });
+  const layout = document.querySelector(".episode-layout");
+  const togglePane = document.getElementById("toggle-pane");
+  const modeButtons = Array.from(document.querySelectorAll(".seg-mode [data-mode]"));
+  // Tuỳ chọn hiển thị theo trình duyệt; storage có thể bị chặn (private mode).
+  const load = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  const save = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+
+  // Kiểu phụ đề: song ngữ / chỉ tiếng Việt / chỉ bản gốc (CSS ẩn dòng theo data-mode).
+  function setMode(mode) {
+    box.dataset.mode = mode;
+    modeButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+    save("dubber.subMode", mode);
+  }
+  modeButtons.forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+  const savedMode = load("dubber.subMode");
+  if (modeButtons.some((b) => b.dataset.mode === savedMode)) setMode(savedMode);
+
+  // Ẩn/hiện cả khung phụ đề; ẩn thì video chiếm hết chiều ngang.
+  function setPane(shown) {
+    layout.classList.toggle("pane-hidden", !shown);
+    if (togglePane) {
+      togglePane.textContent = shown ? "Ẩn phụ đề" : "Hiện phụ đề";
+      togglePane.setAttribute("aria-expanded", String(shown));
+    }
+    save("dubber.paneShown", shown ? "1" : "0");
+  }
+  if (togglePane) togglePane.addEventListener("click", () => setPane(layout.classList.contains("pane-hidden")));
+  if (load("dubber.paneShown") === "0") setPane(false);
+
+  if (load("dubber.autoScroll") === "0") autoScroll.checked = false;
+  autoScroll.addEventListener("change", () => save("dubber.autoScroll", autoScroll.checked ? "1" : "0"));
 
   filter.addEventListener("change", () => {
     rows.forEach((r) => (r.hidden = filter.checked && r.dataset.status !== "too_long"));
@@ -43,7 +68,7 @@
     active = cur || null;
     if (active) {
       active.classList.add("active");
-      if (!active.hidden && autoScroll.checked) reveal(active);
+      if (!active.hidden && autoScroll.checked && !layout.classList.contains("pane-hidden")) reveal(active);
     }
   });
 
@@ -54,8 +79,7 @@
       row.scrollIntoView({ block: "nearest" });
       return;
     }
-    const head = box.querySelector("thead");
-    const top = row.offsetTop - (head ? head.offsetHeight : 0);
+    const top = row.offsetTop;
     const bottom = row.offsetTop + row.offsetHeight;
     if (top < box.scrollTop || bottom > box.scrollTop + box.clientHeight) {
       box.scrollTop = Math.max(0, top - box.clientHeight / 3);

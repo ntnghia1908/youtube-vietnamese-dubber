@@ -1,7 +1,7 @@
 /* WEB-POLISH: giao diện trung tính, một accent. Mọi màu nằm ở token trong :root
    (và bản dark); phần còn lại chỉ dùng var(--…) để đổi theme ở một chỗ duy nhất. */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #f6f7f9;
   --surface: #ffffff;
   --surface-2: #eef0f4;
@@ -25,8 +25,9 @@
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
   --radius: 8px;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+/* Dark: theme.js luôn đặt data-theme (theo hệ thống hoặc nút trong nav). */
+:root[data-theme="dark"] {
+    color-scheme: dark;
     --bg: #14171d;
     --surface: #1c2028;
     --surface-2: #252a34;
@@ -46,7 +47,6 @@
     --log-fg: #d6dae2;
     --shadow: none;
     --focus: rgba(108, 155, 234, .45);
-  }
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -78,7 +78,8 @@ nav strong { margin-right: var(--sp-4); font-size: 1.05rem; letter-spacing: -.01
 nav a { color: var(--text-muted); padding: var(--sp-1) var(--sp-3); border-radius: 6px; }
 nav a:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
 nav a[aria-current="page"] { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
-nav .nav-logout { margin: 0 0 0 auto; }
+nav .nav-right { margin-left: auto; display: flex; gap: var(--sp-1); align-items: center; }
+nav .nav-logout { margin: 0; }
 
 main { padding: var(--sp-4) var(--sp-6) var(--sp-6); max-width: 1200px; margin: 0 auto; }
 
@@ -120,8 +121,8 @@ button.btn-primary:hover:not(:disabled),
 main button[type="submit"]:hover:not(:disabled) {
   background: var(--accent-hover); border-color: var(--accent-hover);
 }
-nav .nav-logout button { background: transparent; border-color: transparent; color: var(--text-muted); }
-nav .nav-logout button:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+nav button.nav-btn { background: transparent; border-color: transparent; color: var(--text-muted); font-weight: 500; }
+nav button.nav-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
 .toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin: var(--sp-3) 0; }
 .toolbar label { margin: 0 var(--sp-3) 0 0; }
 
@@ -168,25 +169,56 @@ body > main > [role="alert"] { color: var(--error); background: var(--error-bg);
 /* Player + danh sách câu */
 video { width: 100%; max-width: 960px; background: var(--media-bg); border-radius: var(--radius); display: block; }
 .player > div { margin-top: var(--sp-2); display: flex; gap: var(--sp-2); flex-wrap: wrap; }
-#segments tr[data-start] { cursor: pointer; }
-#segments tr.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
-#segments tr[data-status="too_long"] td:nth-child(5) { color: var(--error); font-weight: 600; }
-#segments td:nth-child(2), #segments td:nth-child(6) { white-space: nowrap; }
+.player > div .push-right { margin-left: auto; }
+
+/* Khung phụ đề: danh sách câu (cue), mỗi câu có dòng meta + bản dịch + bản gốc.
+   data-mode trên #segments-box chọn song ngữ / chỉ tiếng Việt / chỉ bản gốc. */
+.segments-pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.pane-head {
+  display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); align-items: center; justify-content: space-between;
+  padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.seg-mode { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg-mode button { border: none; border-radius: 0; padding: 4px 12px; font-size: .88rem; background: transparent; color: var(--text-muted); }
+.seg-mode button + button { border-left: 1px solid var(--border); }
+.seg-mode button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pane-opts { display: flex; gap: var(--sp-3); font-size: .88rem; color: var(--text-muted); }
+.pane-opts label { display: inline-flex; align-items: center; cursor: pointer; }
+
+#segments { list-style: none; margin: 0; padding: 0; }
+.cue { padding: var(--sp-2) var(--sp-3) var(--sp-2) calc(var(--sp-3) + 3px); border-bottom: 1px solid var(--border); cursor: pointer; }
+.cue:last-child { border-bottom: none; }
+.cue:hover { background: var(--surface-2); }
+.cue.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.cue-meta { display: flex; gap: var(--sp-2); align-items: baseline; font-size: .75rem; color: var(--text-muted); margin-bottom: 2px; }
+.cue-time { font-weight: 600; color: var(--accent); }
+.cue-flag { color: var(--error); font-weight: 600; }
+.cue-tempo { margin-left: auto; }
+.cue p { margin: 0; }
+.cue-vi { font-size: 1rem; line-height: 1.45; color: var(--text); }
+.cue-en { font-size: .88rem; line-height: 1.4; color: var(--text-muted); margin-top: 2px; }
+.cue-none { font-style: italic; color: var(--text-muted); font-size: .88rem; }
+#segments-box[data-mode="vi"] .cue-en { display: none; }
+#segments-box[data-mode="en"] .cue-vi { display: none; }
+#segments-box[data-mode="en"] .cue-en { font-size: 1rem; color: var(--text); margin-top: 0; }
+.cue-empty { padding: var(--sp-4); color: var(--text-muted); }
 
 /* Episode trên màn hình lớn: danh sách câu cuộn TRONG khung riêng, không kéo cả
    trang (scrollIntoView trên window từng đẩy video ra khỏi màn hình khi đang xem). */
 @media (min-width: 641px) {
-  #segments-box { position: relative; max-height: 60vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
-  #segments-box table { border: none; }
-  #segments-box thead th { position: sticky; top: 0; z-index: 1; border-bottom: 1px solid var(--border); }
+  #segments-box { position: relative; max-height: 60vh; overflow: auto; }
 }
 /* Đủ rộng: video bên trái, danh sách câu bên phải. */
 @media (min-width: 1000px) {
   main:has(.episode-layout) { max-width: 1700px; }
   .episode-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--sp-4); align-items: start; }
   .player-col { position: sticky; top: var(--sp-2); }
-  .segments-pane #segments-box { max-height: calc(100vh - 7rem); }
+  .segments-pane #segments-box { max-height: calc(100vh - 9rem); }
+  /* Ẩn khung phụ đề: video chiếm hết bề ngang (giới hạn để không quá to). */
+  .episode-layout.pane-hidden { grid-template-columns: minmax(0, 1fr); max-width: 1100px; margin: 0 auto; }
+  .episode-layout.pane-hidden video { max-width: none; }
 }
+.episode-layout.pane-hidden .segments-pane { display: none; }
 
 /* WEB-MOBILE: rule chung ở trên vô hại với desktop; mọi thay đổi bố cục nằm trong
    media query bên dưới. */
@@ -229,7 +261,9 @@ video { width: 100%; max-width: 960px; background: var(--media-bg); border-radiu
   .player-col { display: contents; }
   .player { position: sticky; top: 0; z-index: 2; background: var(--bg); padding-bottom: var(--sp-1); }
   video { max-height: 35vh; }
-  #segments tr { scroll-margin-top: calc(var(--player-h, 0px) + .5rem); }
+  .segments-pane { margin-top: var(--sp-2); }
+  #segments .cue { scroll-margin-top: calc(var(--player-h, 0px) + .5rem); }
+  .seg-mode button { min-height: 40px; }
 
   .log { height: 16rem; font-size: 13px; }
 }
