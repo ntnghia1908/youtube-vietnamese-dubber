@@ -8,6 +8,9 @@ license = { text = "Proprietary" }
 dependencies = [
     "yt-dlp>=2024.12.0",
     "faster-whisper>=1.0.0",
+    # faster-whisper 1.2.1 gọi av.open(..., metadata_errors=...) mà av 17+ đã bỏ
+    # -> stage transcribe lỗi trên máy cài mới. Bỏ ghim khi faster-whisper hỗ trợ av mới.
+    "av>=14,<17",
     "pyyaml>=6.0",
     "edge-tts>=7.0",
 ]
