@@ -63,7 +63,7 @@ Lịch sử, không phải authority hiện hành: `docs/specs/cp-*.md` (spec c�
 
 - Target branch: `main`, remote `origin` (`github.com:ntnghia1908/youtube-vietnamese-dubber`). Repo một người: commit thẳng `main` là mặc định; branch/PR chỉ khi HUMAN LEAD yêu cầu.
 - Commit: mỗi checkpoint/task một commit (`checkpoint-N: ...`, gồm cả task contract và `docs/decisions/checkpoint-N.md`); bug fix tách riêng (`fix(scope): ...`); tài liệu `docs: ...`.
-- ORCHESTRATOR chỉ commit khi HUMAN LEAD đồng ý; push do HUMAN LEAD yêu cầu. IMPLEMENTER không commit/push.
+- ORCHESTRATOR tự commit khi task đạt READY (hoặc fix/docs xong và verification PASS), không cần hỏi lại (HUMAN LEAD 2026-10-17); push do HUMAN LEAD yêu cầu. IMPLEMENTER không commit/push.
 
 ## 6. Ownership
 

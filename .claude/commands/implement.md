@@ -35,6 +35,6 @@ không tự viết code.
    cho user (file đã đổi, kết quả chạy thật, quyết định `[CẦN DUYỆT]`, phần
    chưa làm, manual test checklist cho user), đề xuất commit
    `checkpoint-N: ...` / `web-N: ...` (tiếng Việt, gồm contract và decisions),
-   commit khi user đồng ý. Cập nhật `docs/workflow/current-state.md` nếu
+   commit luôn (không cần hỏi — `docs/ai/project-profile.md` §5). Cập nhật `docs/workflow/current-state.md` nếu
    focus/next action đổi. Nhắc `/clear` kèm handoff prompt. **DỪNG** —
    không mở checkpoint tiếp theo.
