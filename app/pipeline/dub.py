@@ -183,6 +183,18 @@ def run_dub(
     transcript_existed = transcript_path.exists()
     try:
         extract_audio(episode_info.source_path, audio_path, force=options.force)
+        cpu_threads = 0
+        if options.force or not transcript_existed:
+            # Chỉ dò/in khi Whisper thật sự chạy (transcript đã có -> im lặng).
+            from app.hardware import cpu_count, resolve_whisper_cpu_threads
+
+            cpu_threads = resolve_whisper_cpu_threads(config.whisper.cpu_threads)
+            origin = (
+                f"auto, {cpu_count()} CPU"
+                if config.whisper.cpu_threads == "auto"
+                else "theo config"
+            )
+            log(f"[transcribe] Whisper dùng {cpu_threads} thread CPU ({origin})")
         transcribe_result = transcribe_audio(
             audio_path,
             transcript_path,
@@ -191,6 +203,7 @@ def run_dub(
             compute_type=config.whisper.compute_type,
             language=options.source_lang,
             force=options.force,
+            cpu_threads=cpu_threads,
         )
     except (AudioExtractionError, TranscriptionError) as exc:
         raise DubError("transcribe", str(exc)) from exc

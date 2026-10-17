@@ -221,7 +221,12 @@ python -m app web --workspace output   # mở http://127.0.0.1:8765
   30 ngày (đổi mật khẩu thì phải đăng nhập lại), sai 5 lần/5 phút từ một IP bị khoá tạm.
   **Kết nối là HTTP, không mã hoá** — mật khẩu đi qua mạng dạng rõ, chỉ dùng trong LAN tin cậy.
   Bind `127.0.0.1` không đặt mật khẩu thì không đăng nhập.
-- Giới hạn: một job chạy một lúc (hàng đợi FIFO). Tắt server giữa chừng thì job đang chạy
+- Hàng đợi chạy tối đa `web.max_jobs` job cùng lúc (`auto` mặc định: 2 nếu máy >= 8 CPU và
+  không có GPU CUDA, ngược lại 1; trần cứng 2; flag `--max-jobs N` ghi đè). FIFO, nhưng job
+  trùng target với job đang chạy (cùng video, cùng playlist, hoặc tập nằm trong playlist
+  đang chạy) phải chờ. Mỗi tiến trình Whisper dùng `whisper.cpu_threads` thread CPU
+  (`auto` = số CPU / 2, tối đa 12; `0` = để thư viện tự chọn). `app web` in số job đã chọn
+  ra stderr. Tắt server giữa chừng thì job đang chạy
   thành `interrupted` (tiến trình pipeline con có thể còn chạy nốt, xem
   `docs/decisions/WEB-1.md`).
 

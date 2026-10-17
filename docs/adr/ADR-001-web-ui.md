@@ -38,6 +38,7 @@ Ngoài phạm vi: hosting công khai, nhiều người dùng, đăng nhập, dat
 - Filesystem/JSON là source of truth (plan §31 "Database: Không"); web **không** được tạo bản state thứ hai cho dữ liệu pipeline — luôn đọc artifact trong `workspace`.
 - Mọi stage resume được (profile §4 luật 3) → hủy job = kill tiến trình là an toàn, chạy lại sẽ SKIP phần đã xong.
 - GPU dùng chung (Whisper + Ollama `gemma3:12b`) → tối đa **một job xử lý** cùng lúc.
+  > Sửa đổi 2026-10-17: xem mục 10.
 - Không hard-code: host/port/workspace qua `config.yaml` + flag CLI.
 - Bản quyền: chỉ phục vụ cho chính người dùng trên máy local.
 
@@ -63,6 +64,8 @@ Ngoài phạm vi: hosting công khai, nhiều người dùng, đăng nhập, dat
 Dependency đặt ở extra `[project.optional-dependencies] web = [...]` để người chỉ dùng CLI không phải cài. Test cần thêm `httpx` (TestClient) ở extra `dev`/`web`.
 
 ### 4.3 Chạy job (D3)
+
+> Sửa đổi 2026-10-17: xem mục 10.
 
 | Phương án | Ưu | Nhược |
 |---|---|---|
@@ -142,3 +145,7 @@ Trả lời của HUMAN LEAD (2026-10-17): D1–D5 theo cột khuyến nghị; D
 HUMAN LEAD (2026-10-17), sau khi thực tế chạy web trên LAN (`--host 10.8.102.102`): chấp nhận **D1-B ở mức tối thiểu** — được bind ngoài localhost **chỉ khi** bật đăng nhập bằng một mật khẩu duy nhất, lấy từ biến môi trường (không lưu trong file). Làm thành task riêng `WEB-AUTH`, implement **trước** WEB-2 (WEB-2 thêm route ghi file). Không thêm dependency (stdlib `hmac`/`secrets`). Không HTTPS, không nhiều user — chấp nhận rủi ro mật khẩu đi plaintext trên LAN tin cậy.
 
 `WEB-AUTH` **không** nằm trong boundary mục 0 (security model) → cần `APPROVE TASK` cho contract `docs/tasks/WEB-AUTH-password-login.md`.
+
+## 10. Sửa đổi 2026-10-17 — D3: hàng đợi tối đa 2 job song song
+
+HUMAN LEAD (2026-10-17): máy chạy thật là Linux 32 core, Whisper chạy CPU, Ollama ở máy khác — lý do "GPU dùng chung" ở mục 3 không còn đúng cho máy này nhưng vẫn đúng cho máy có GPU. Hàng đợi chạy tối đa `web.max_jobs` job cùng lúc (trần cứng 2), FIFO; job có target trùng với job đang chạy (cùng video, cùng playlist, hoặc tập nằm trong playlist đang chạy) phải chờ, không chạy song song. Mặc định `web.max_jobs` và `whisper.cpu_threads` là `auto`: tính theo CPU/GPU dò được trên **từng máy** lúc chạy (có GPU CUDA → 1 job; CPU ≥ 8 → 2 job; thread Whisper = CPU / 2, trần 12) — máy 32 core ra 2 job × 12 thread. Đặt số cụ thể để ghi đè. Task: `docs/tasks/WEB-PARALLEL-two-workers.md`.

@@ -4,7 +4,9 @@ Thiết kế (ADR-001 4.3):
 - Job chạy ``[python, -m, app, <kind>, <url>, ...]`` chứ không gọi ``run_dub``
   trong tiến trình server: kill an toàn, một job treo/crash không kéo server
   chết, và web dùng đúng đường chạy đã được kiểm chứng của CLI.
-- Một worker, FIFO: GPU/Ollama dùng chung, hai pipeline song song chỉ chậm hơn.
+- Tối đa ``max_jobs`` worker (trần 2, ADR-001 mục 10), FIFO nhưng job có target
+  trùng job đang chạy phải chờ (không bao giờ hai writer trên cùng một thư mục),
+  job không xung đột phía sau được vượt lên.
 - Trạng thái nằm trên đĩa (``<workspace>/.web/jobs/<id>.json`` + ``.log``),
   ghi atomic, nên server restart không mất lịch sử. Pipeline resume được nên
   job bị ngắt chạy lại (retry) sẽ SKIP phần đã xong.
@@ -72,6 +74,54 @@ class JobRequest:
     episode_key: str | None = None  # bắt buộc với glossary, cấm với dub/playlist
 
 
+def _video_id(url: str) -> str:
+    """id video từ ``v=``, ``youtu.be/<id>`` hoặc ``/shorts/<id>``; không có -> chuỗi rỗng."""
+    try:
+        parsed = urlparse(url.strip())
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        return ""
+    path_parts = [p for p in parsed.path.split("/") if p]
+    if host == "youtu.be":
+        return path_parts[0] if path_parts else ""
+    if len(path_parts) >= 2 and path_parts[0] == "shorts":
+        return path_parts[1]
+    return parse_qs(parsed.query).get("v", [""])[0]
+
+
+def job_targets(
+    kind: str,
+    request: dict[str, Any],
+    command: list[str],
+    *,
+    workspace: Path | None = None,
+) -> frozenset[str]:
+    """Các "đích" job sẽ ghi vào; hai job giao nhau khác rỗng thì xung đột.
+
+    Bảo thủ có chủ ý: job ``dub`` video X và tập X trong một playlist bị coi là
+    xung đột dù thư mục khác nhau. Thuần, không đọc đĩa.
+    """
+    if kind == "dub":
+        vid = _video_id(request.get("url") or "")
+        return frozenset({f"video:{vid}"}) if vid else frozenset()
+    if kind == "playlist":
+        query = parse_qs(urlparse((request.get("url") or "").strip()).query)
+        list_id = query.get("list", [""])[0]
+        return frozenset({f"playlist:{list_id}"}) if list_id else frozenset()
+    if kind == "glossary":
+        # build_command đặt thư mục tập ở command[4]. Tên thư mục: <id>__<title>.
+        episode_dir = Path(command[4])
+        targets = {f"video:{episode_dir.name.split('__', 1)[0]}"}
+        parent = episode_dir.parent
+        # Tập nằm trong playlist: thư mục cha khác workspace. Không biết workspace
+        # (gọi thuần) thì dựa vào tên cha có dạng "<id>__<title>".
+        in_playlist = parent != workspace if workspace is not None else "__" in parent.name
+        if in_playlist:
+            targets.add(f"playlist:{parent.name.split('__', 1)[0]}")
+        return frozenset(targets)
+    return frozenset()
+
+
 def validate_request(req: JobRequest) -> None:
     """Raise ``JobValidationError`` nếu request sai. Chạy TRƯỚC khi tạo job."""
     if req.kind not in JOB_KINDS:
@@ -113,13 +163,7 @@ def validate_request(req: JobRequest) -> None:
         if not query.get("list", [""])[0]:
             raise JobValidationError("URL playlist phải có tham số `list=`.")
     else:
-        path_parts = [p for p in parsed.path.split("/") if p]
-        has_video = bool(query.get("v", [""])[0])
-        if host == "youtu.be":
-            has_video = bool(path_parts)
-        elif len(path_parts) >= 2 and path_parts[0] == "shorts":
-            has_video = True
-        if not has_video:
+        if not _video_id(url):
             raise JobValidationError(
                 "URL video phải có `v=<id>`, dạng youtu.be/<id> hoặc /shorts/<id>."
             )
@@ -245,13 +289,14 @@ def _new_job_id() -> str:
 
 
 class JobManager:
-    """Hàng đợi job FIFO, một worker thread, trạng thái lưu trên đĩa."""
+    """Hàng đợi job FIFO tránh xung đột target, tối đa ``max_jobs`` worker, trạng thái lưu trên đĩa."""
 
     def __init__(
         self,
         workspace: Path,
         config_path: Path | None,
         *,
+        max_jobs: int = 1,
         python: str = sys.executable,
         popen: Callable[..., Any] = subprocess.Popen,
         killpg: Callable[[int, int], None] | None = None,
@@ -261,6 +306,7 @@ class JobManager:
     ) -> None:
         self._workspace = Path(workspace)
         self._config_path = config_path
+        self._max_jobs = max(1, int(max_jobs))
         self._python = python
         self._popen = popen
         # killpg inject để test không bao giờ gửi tín hiệu thật tới pid giả.
@@ -274,9 +320,10 @@ class JobManager:
         self._cond = threading.Condition(self._lock)
         self._queue: deque[str] = deque()
         self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._current_id: str | None = None
-        self._current_proc: Any = None
+        self._threads: list[threading.Thread] = []
+        # job_id -> (proc hoặc None khi chưa spawn, targets). Đăng ký ngay khi
+        # lấy khỏi queue để hai worker không cùng lấy hai job xung đột.
+        self._running: dict[str, tuple[Any | None, frozenset[str]]] = {}
         self._cancel_requested: set[str] = set()
 
     # ---- đường dẫn / lưu trữ -------------------------------------------
@@ -325,8 +372,12 @@ class JobManager:
             for job in sorted(queued, key=lambda j: (j.get("created_at") or "", j["id"])):
                 self._queue.append(job["id"])
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._worker_loop, name="job-worker", daemon=True)
-        self._thread.start()
+        self._threads = [
+            threading.Thread(target=self._worker_loop, name=f"job-worker-{i}", daemon=True)
+            for i in range(self._max_jobs)
+        ]
+        for thread in self._threads:
+            thread.start()
 
     def _reap_orphan(self, job: dict[str, Any]) -> None:
         pid = job.get("pid")
@@ -355,13 +406,13 @@ class JobManager:
     def stop(self) -> None:
         self._stop_event.set()
         with self._cond:
-            proc = self._current_proc
+            procs = [proc for proc, _ in self._running.values() if proc is not None]
             self._cond.notify_all()
-        if proc is not None:
+        for proc in procs:
             self._signal(proc, force=True)
-        if self._thread is not None:
-            self._thread.join(timeout=15)
-            self._thread = None
+        for thread in self._threads:
+            thread.join(timeout=15)
+        self._threads = []
 
     # ---- API ------------------------------------------------------------
 
@@ -441,7 +492,8 @@ class JobManager:
             if job["status"] != "running":
                 return job
             self._cancel_requested.add(job_id)
-            proc = self._current_proc if self._current_id == job_id else None
+            entry = self._running.get(job_id)
+            proc = entry[0] if entry is not None else None
         if proc is not None:
             self._signal(proc, force=False)
             threading.Thread(target=self._escalate, args=(proc,), daemon=True).start()
@@ -477,14 +529,28 @@ class JobManager:
 
     # ---- worker ----------------------------------------------------------
 
+    def _targets_of(self, job: dict[str, Any]) -> frozenset[str]:
+        return job_targets(
+            job["kind"], job["request"], job["command"], workspace=self._workspace
+        )
+
     def _next_queued(self) -> str | None:
         with self._cond:
             while not self._stop_event.is_set():
-                while self._queue:
-                    job_id = self._queue.popleft()
+                busy: set[str] = set()
+                for _, targets in self._running.values():
+                    busy |= targets
+                for job_id in list(self._queue):
                     job = self._read(job_id)
-                    if job is not None and job["status"] == "queued":
-                        return job_id  # job đã bị hủy khi còn queued thì bỏ qua
+                    if job is None or job["status"] != "queued":
+                        self._queue.remove(job_id)  # đã bị hủy khi còn queued
+                        continue
+                    targets = self._targets_of(job)
+                    if targets & busy:
+                        continue  # xung đột: giữ nguyên vị trí, job sau được vượt lên
+                    self._queue.remove(job_id)
+                    self._running[job_id] = (None, targets)
+                    return job_id
                 self._cond.wait(timeout=1.0)
         return None
 
@@ -504,6 +570,16 @@ class JobManager:
                         self._write(job)
                     with self.log_path(job_id).open("a", encoding="utf-8") as fh:
                         fh.write(f"[web] LỖI nội bộ khi chạy job: {exc}\n")
+            finally:
+                # Gỡ SAU khi trạng thái đã ghi xong, để job xung đột đang chờ
+                # không chạy khi job này còn ghi dở.
+                self._unregister(job_id)
+
+    def _unregister(self, job_id: str) -> None:
+        """Gỡ job khỏi ``_running`` rồi đánh thức worker đang chờ job xung đột."""
+        with self._cond:
+            self._running.pop(job_id, None)
+            self._cond.notify_all()
 
     def _run_job(self, job_id: str) -> None:
         with self._lock:
@@ -513,7 +589,6 @@ class JobManager:
             job["status"] = "running"
             job["started_at"] = _now_iso()
             self._write(job)
-            self._current_id = job_id
 
         env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
         extra: dict[str, Any] = {}
@@ -545,7 +620,8 @@ class JobManager:
                 return
 
             with self._lock:
-                self._current_proc = proc
+                if job_id in self._running:
+                    self._running[job_id] = (proc, self._running[job_id][1])
                 current = self._read(job_id)
                 if current is not None:
                     current["pid"] = getattr(proc, "pid", None)
@@ -572,9 +648,6 @@ class JobManager:
             exit_code = proc.wait()
         finally:
             log_file.close()
-            with self._lock:
-                self._current_proc = None
-                self._current_id = None
 
         with self._lock:
             cancelled = job_id in self._cancel_requested

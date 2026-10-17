@@ -10,6 +10,7 @@ whisper:
   model: medium          # tiny/base/small/medium/large-v3
   device: auto           # auto/cpu/cuda
   compute_type: auto
+  cpu_threads: auto      # thread CPU mỗi tiến trình Whisper. auto = số CPU của máy / 2, tối đa 12 (máy 32 core -> 12); 0 = để thư viện tự chọn (~4); hoặc một số cụ thể
 
 translation:
   provider: ollama
@@ -50,3 +51,4 @@ pipeline:
 web:
   host: 127.0.0.1   # `python -m app web`: mặc định chỉ bind localhost. Mở LAN (host khác loopback) bắt buộc đặt biến môi trường DUBBER_WEB_PASSWORD (ADR-001 mục 9)
   port: 8765        # 1–65535
+  max_jobs: auto    # job chạy song song tối đa trên Web UI (1–2). auto = 1 nếu có GPU CUDA (dùng chung) hoặc máy < 8 CPU, còn lại 2

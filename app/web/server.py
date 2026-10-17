@@ -473,11 +473,12 @@ def run(
     config_path: Path | None,
     password: str | None = None,
     shared_glossary: Path | None = None,
+    max_jobs: int = 1,
 ) -> None:
     """Chạy uvicorn (chặn tới khi Ctrl+C)."""
     import uvicorn
 
-    manager = JobManager(workspace, config_path)
+    manager = JobManager(workspace, config_path, max_jobs=max_jobs)
     app = create_app(workspace, manager, allowed_hosts=(host,), password=password,
                      shared_glossary=shared_glossary)
     print(f"[web] http://{host}:{port}  (workspace: {workspace})", flush=True)

@@ -159,3 +159,37 @@ class TestSourceLanguage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCpuThreads(unittest.TestCase):
+    def test_cpu_threads_reaches_run_whisper(self) -> None:
+        with TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "audio.wav"
+            audio.write_bytes(b"x")
+            with patch(
+                "app.transcription.whisper._run_whisper", return_value=("en", [])
+            ) as mock_run:
+                transcribe_audio(audio, Path(tmp) / "t.json", cpu_threads=12)
+            self.assertEqual(mock_run.call_args.kwargs["cpu_threads"], 12)
+
+    def test_cpu_threads_reaches_whisper_model(self) -> None:
+        import sys
+        import types
+
+        calls = []
+
+        class FakeModel:
+            def __init__(self, *args, **kwargs) -> None:
+                calls.append(kwargs)
+
+            def transcribe(self, path, language=None):
+                return iter(()), types.SimpleNamespace(language="en")
+
+        fake = types.ModuleType("faster_whisper")
+        fake.WhisperModel = FakeModel
+        with patch.dict(sys.modules, {"faster_whisper": fake}):
+            from app.transcription.whisper import _run_whisper
+
+            _run_whisper(Path("a.wav"), model_size="tiny", device="cpu",
+                         compute_type="auto", language=None, cpu_threads=12)
+        self.assertEqual(calls[0]["cpu_threads"], 12)

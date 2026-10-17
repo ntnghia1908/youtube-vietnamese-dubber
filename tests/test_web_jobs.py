@@ -17,6 +17,7 @@ from app.web.jobs import (
     JobRequest,
     JobValidationError,
     build_command,
+    job_targets,
     parse_progress,
     read_log_lines,
     validate_request,
@@ -483,3 +484,120 @@ class TestGlossaryJobs(ManagerCase):
         new = m.retry(old["id"])
         self.assertFalse(new["request"]["recheck"])
         self.assertIsNone(new["request"]["episode_key"])
+
+
+class TestJobTargets(unittest.TestCase):
+    def test_dub_variants(self) -> None:
+        for url in (
+            "https://www.youtube.com/watch?v=abc123&t=5",
+            "https://youtu.be/abc123",
+            "https://www.youtube.com/shorts/abc123",
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(job_targets("dub", {"url": url}, []), {"video:abc123"})
+
+    def test_playlist(self) -> None:
+        self.assertEqual(
+            job_targets("playlist", {"url": PLAYLIST + "&x=1"}, []), {"playlist:PLxyz"}
+        )
+
+    def test_glossary_single_and_in_playlist(self) -> None:
+        ws = Path("/ws")
+        cmd = ["py", "-m", "app", "glossary", "/ws/v1__t"]
+        self.assertEqual(job_targets("glossary", {}, cmd, workspace=ws), {"video:v1"})
+        cmd = ["py", "-m", "app", "glossary", "/ws/PLxyz__pl/v1__t"]
+        self.assertEqual(
+            job_targets("glossary", {}, cmd, workspace=ws), {"video:v1", "playlist:PLxyz"}
+        )
+        self.assertEqual(
+            job_targets("glossary", {}, cmd), {"video:v1", "playlist:PLxyz"}
+        )
+
+
+class TestParallel(ManagerCase):
+    def _ready(self, n: int) -> None:
+        wait_until(lambda: len(self.procs) >= n)
+
+    def test_two_run_together_third_waits(self) -> None:
+        m = self.make(max_jobs=2)
+        m.start()
+        j1 = m.submit(JobRequest("dub", "https://youtu.be/aaa"))
+        j2 = m.submit(JobRequest("dub", "https://youtu.be/bbb"))
+        j3 = m.submit(JobRequest("dub", "https://youtu.be/ccc"))
+        self._ready(2)
+        wait_until(lambda: self.status(m, j1["id"]) == "running"
+                   and self.status(m, j2["id"]) == "running")
+        time.sleep(0.2)
+        self.assertEqual(len(self.procs), 2)
+        self.assertEqual(self.status(m, j3["id"]), "queued")
+        self.procs[0].finish(0)
+        self._ready(3)
+        self.assertIn("ccc", self.procs[2].cmd[4])
+
+    def test_conflict_waits_and_independent_overtakes(self) -> None:
+        m = self.make(max_jobs=2)
+        m.start()
+        m.submit(JobRequest("playlist", PLAYLIST))
+        j2 = m.submit(JobRequest("playlist", PLAYLIST + "&index=1"))  # cùng list
+        j3 = m.submit(JobRequest("dub", "https://youtu.be/ccc"))
+        self._ready(2)
+        self.assertIn("ccc", self.procs[1].cmd[4])  # j3 vượt lên j2
+        time.sleep(0.2)
+        self.assertEqual(len(self.procs), 2)
+        self.assertEqual(self.status(m, j2["id"]), "queued")
+        self.procs[0].finish(0)
+        self._ready(3)
+        self.assertEqual(self.procs[2].cmd[4], PLAYLIST + "&index=1")
+        self.assertEqual(self.status(m, j3["id"]), "running")
+
+    def test_glossary_waits_for_running_playlist(self) -> None:
+        ep = self.ws / "PLxyz__pl" / "v1__t"
+        ep.mkdir(parents=True)
+        (ep / "metadata.json").write_text(json.dumps({"id": "v1"}), encoding="utf-8")
+        (ep / "transcript.json").write_text("{}", encoding="utf-8")
+        (ep.parent / "playlist.json").write_text("{}", encoding="utf-8")
+        m = self.make(max_jobs=2)
+        m.start()
+        m.submit(JobRequest("playlist", PLAYLIST))
+        self._ready(1)
+        jg = m.submit(JobRequest("glossary", episode_key="PLxyz__pl~v1__t"))
+        time.sleep(0.3)
+        self.assertEqual(len(self.procs), 1)
+        self.assertEqual(self.status(m, jg["id"]), "queued")
+        self.procs[0].finish(0)
+        self._ready(2)
+
+    def test_max_jobs_1_is_serial(self) -> None:
+        m = self.make(max_jobs=1)
+        m.start()
+        m.submit(JobRequest("dub", "https://youtu.be/aaa"))
+        m.submit(JobRequest("dub", "https://youtu.be/bbb"))
+        self._ready(1)
+        time.sleep(0.3)
+        self.assertEqual(len(self.procs), 1)
+
+    def test_cancel_one_of_two_and_stop_kills_rest(self) -> None:
+        m = self.make(max_jobs=2)
+        m.start()
+        j1 = m.submit(JobRequest("dub", "https://youtu.be/aaa"))
+        j2 = m.submit(JobRequest("dub", "https://youtu.be/bbb"))
+        self._ready(2)
+        wait_until(lambda: self.status(m, j2["id"]) == "running")
+        wait_until(lambda: m.get(j2["id"])["pid"] is not None)
+        m.cancel(j1["id"])
+        wait_until(lambda: self.status(m, j1["id"]) == "cancelled")
+        self.assertEqual(self.status(m, j2["id"]), "running")
+        self.assertEqual([p for p, _ in self.signals], [self.procs[0].pid])
+        m.stop()
+        self.assertEqual(self.status(m, j2["id"]), "interrupted")
+        self.assertIn((self.procs[1].pid, signal.SIGKILL), self.signals)
+
+    def test_recovery_respects_max_jobs(self) -> None:
+        m1 = self.make(max_jobs=2)  # chỉ ghi state
+        for name in ("aaa", "bbb", "ccc"):
+            m1.submit(JobRequest("dub", f"https://youtu.be/{name}"))
+        m2 = self.make(max_jobs=2)
+        m2.start()
+        self._ready(2)
+        time.sleep(0.3)
+        self.assertEqual(len(self.procs), 2)

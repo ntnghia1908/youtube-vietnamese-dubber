@@ -50,6 +50,7 @@ def _run_whisper(
     device: str,
     compute_type: str,
     language: str | None,
+    cpu_threads: int = 0,
 ) -> tuple[str, list[Segment]]:
     """Chạy faster-whisper thật. Raise TranscriptionError nếu load/transcribe lỗi."""
     try:
@@ -60,7 +61,9 @@ def _run_whisper(
         ) from exc
 
     try:
-        model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        model = WhisperModel(
+            model_size, device=device, compute_type=compute_type, cpu_threads=cpu_threads
+        )
         # language=None -> để Whisper tự nhận dạng. Auto-detect có thể đoán
         # sai với confidence thấp (vd nhạc nền ở đầu video), khi đó toàn bộ
         # transcript sẽ bị dịch sang ngôn ngữ đoán nhầm thay vì phiên âm
@@ -114,6 +117,7 @@ def transcribe_audio(
     compute_type: str = "auto",
     language: str | None = None,
     force: bool = False,
+    cpu_threads: int = 0,
 ) -> TranscriptResult:
     """Transcribe ``audio_path`` bằng faster-whisper, ghi ra ``transcript_path``.
 
@@ -140,6 +144,7 @@ def transcribe_audio(
         device=device,
         compute_type=compute_type,
         language=language,
+        cpu_threads=cpu_threads,
     )
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
     _write_transcript(detected_language, segments, transcript_path)

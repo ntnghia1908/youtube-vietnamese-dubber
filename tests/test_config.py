@@ -285,3 +285,25 @@ class TestLoadConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestParallelConfig(unittest.TestCase):
+    def test_defaults_are_auto(self) -> None:
+        cfg = AppConfig()
+        self.assertEqual((cfg.whisper.cpu_threads, cfg.web.max_jobs), ("auto", "auto"))
+
+    def test_valid_values(self) -> None:
+        for v in (1, 2, "auto"):
+            self.assertEqual(parse_config({"web": {"max_jobs": v}}).web.max_jobs, v)
+        for v in (0, 4, 12, "auto"):
+            self.assertEqual(parse_config({"whisper": {"cpu_threads": v}}).whisper.cpu_threads, v)
+
+    def test_invalid_max_jobs(self) -> None:
+        for v in (0, 3, "2", True, None):
+            with self.subTest(v=v), self.assertRaises(ConfigError):
+                parse_config({"web": {"max_jobs": v}})
+
+    def test_invalid_cpu_threads(self) -> None:
+        for v in (-1, True, "12", "max", 1.5):
+            with self.subTest(v=v), self.assertRaises(ConfigError):
+                parse_config({"whisper": {"cpu_threads": v}})

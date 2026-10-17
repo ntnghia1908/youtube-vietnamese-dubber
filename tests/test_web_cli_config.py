@@ -88,6 +88,25 @@ class TestWebCommand(unittest.TestCase):
             ["web", "--host", "10.0.0.5", "--port", "2222", "--workspace", "w2"], "pw")
         self.assertEqual((code, calls[0][:2], str(calls[0][2])), (0, ("10.0.0.5", 2222), "w2"))
 
+    def test_max_jobs_flag_and_config(self) -> None:
+        # Flag ghi đè; mặc định auto resolve theo phần cứng (inject qua patch).
+        with patch("app.hardware.cpu_count", return_value=32), \
+                patch("app.hardware.cuda_device_count", return_value=0):
+            code, calls, err = self._run_web(["web"], None)
+            self.assertEqual((code, calls[0][6]), (0, 2))
+            self.assertIn("[web] Hàng đợi: tối đa 2 job song song (32 CPU)", err)
+            code, calls, err = self._run_web(["web", "--max-jobs", "1"], None)
+            self.assertEqual((code, calls[0][6]), (0, 1))
+            self.assertIn("theo config", err)
+
+    def test_max_jobs_invalid_exits_2(self) -> None:
+        for bad in ("3", "0"):
+            code, calls, err = self._run_web(["web", "--max-jobs", bad], None)
+            with self.subTest(bad=bad):
+                self.assertEqual(code, 2)
+                self.assertEqual(calls, [])
+                self.assertIn("web.max_jobs", err)
+
     def test_shared_glossary_passed_to_run(self) -> None:
         code, calls, _ = self._run_web(["web"], None)
         self.assertIsNone(calls[0][5])

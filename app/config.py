@@ -25,11 +25,18 @@ class ConfigError(ValueError):
     """File config không đọc được hoặc có giá trị không hợp lệ."""
 
 
+# Trần cứng số job web chạy song song (ADR-001 mục 10).
+MAX_WEB_JOBS = 2
+
+
 @dataclass(frozen=True)
 class WhisperConfig:
     model: str = "medium"
     device: str = "auto"
     compute_type: str = "auto"
+    # "auto" giữ nguyên ở config; resolve theo CPU máy lúc Whisper thật sự chạy
+    # (app/hardware.py). 0 = để CTranslate2 tự chọn (~4 thread).
+    cpu_threads: int | str = "auto"
 
 
 @dataclass(frozen=True)
@@ -100,6 +107,8 @@ class WebConfig:
     # DUBBER_WEB_PASSWORD (ADR-001 mục 9), nếu không `web` từ chối chạy.
     host: str = "127.0.0.1"
     port: int = 8765
+    # "auto" resolve lúc chạy `web` theo phần cứng (app/hardware.py).
+    max_jobs: int | str = "auto"
 
 
 @dataclass(frozen=True)
@@ -120,6 +129,7 @@ _WHISPER_TYPES: dict[str, tuple[type | None, ...]] = {
     "model": (str,),
     "device": (str,),
     "compute_type": (str,),
+    "cpu_threads": (int, str),
 }
 _TRANSLATION_TYPES: dict[str, tuple[type | None, ...]] = {
     "provider": (str,),
@@ -162,6 +172,7 @@ _PIPELINE_TYPES: dict[str, tuple[type | None, ...]] = {
 _WEB_TYPES: dict[str, tuple[type | None, ...]] = {
     "host": (str,),
     "port": (int,),
+    "max_jobs": (int, str),
 }
 # vd "+0%", "-10%", "+100%". YAML `rate: +0%` không quote vẫn parse ra str,
 # nhưng thiếu dấu % (`rate: 0%` thành số 0 hoặc thiếu dấu +/-) là lỗi hay gặp.
@@ -219,6 +230,26 @@ def validate_mixing(
     if max_shift_seconds < 0.0:
         raise ConfigError(
             f"`mixing.max_shift_seconds` không được âm (đang là {max_shift_seconds})."
+        )
+
+
+def validate_web_max_jobs(value: object) -> None:
+    """``"auto"`` hoặc số nguyên 1–MAX_WEB_JOBS. Dùng chung cho config và flag ``--max-jobs``."""
+    if value == "auto" and isinstance(value, str):
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_WEB_JOBS:
+        raise ConfigError(
+            f'`web.max_jobs` phải là "auto" hoặc số nguyên 1–{MAX_WEB_JOBS} (đang là {value!r}).'
+        )
+
+
+def validate_whisper_cpu_threads(value: object) -> None:
+    """``"auto"`` hoặc số nguyên >= 0 (0 = để thư viện tự chọn)."""
+    if value == "auto" and isinstance(value, str):
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigError(
+            f'`whisper.cpu_threads` phải là "auto" hoặc số nguyên >= 0 (đang là {value!r}).'
         )
 
 
@@ -297,9 +328,11 @@ def parse_config(data: Any) -> AppConfig:
             raise ConfigError("`target_language` phải là mã ngôn ngữ dạng chuỗi (vd vi).")
         kwargs["target_language"] = data["target_language"]
 
-    kwargs["whisper"] = WhisperConfig(
+    whisper = WhisperConfig(
         **_check_section(data.get("whisper"), "whisper", _WHISPER_TYPES)
     )
+    validate_whisper_cpu_threads(whisper.cpu_threads)
+    kwargs["whisper"] = whisper
 
     translation = TranslationConfig(
         **_check_section(data.get("translation"), "translation", _TRANSLATION_TYPES)
@@ -349,6 +382,7 @@ def parse_config(data: Any) -> AppConfig:
 
     web = WebConfig(**_check_section(data.get("web"), "web", _WEB_TYPES))
     validate_web_port(web.port)
+    validate_web_max_jobs(web.max_jobs)
     if not web.host.strip():
         raise ConfigError("`web.host` không được để trống.")
     kwargs["web"] = web

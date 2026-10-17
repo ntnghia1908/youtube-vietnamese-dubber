@@ -347,6 +347,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Port (mặc định: `web.port` trong config, hoặc 8765).",
     )
     web_parser.add_argument(
+        "--max-jobs",
+        type=int,
+        default=None,
+        help=(
+            "Số job chạy song song tối đa (1–2; mặc định `web.max_jobs` trong config, "
+            "hoặc tự dò theo phần cứng)."
+        ),
+    )
+    web_parser.add_argument(
         "--workspace",
         default=None,
         help="Thư mục gốc chứa các episode (mặc định: `workspace` trong config, hoặc output).",
@@ -441,6 +450,20 @@ def _cmd_transcribe(args: argparse.Namespace, config: AppConfig) -> int:
 
     try:
         extract_audio(source_path, audio_path, force=args.force)
+        cpu_threads = 0
+        if args.force or not transcript_path.exists():
+            from app.hardware import cpu_count, resolve_whisper_cpu_threads
+
+            cpu_threads = resolve_whisper_cpu_threads(config.whisper.cpu_threads)
+            origin = (
+                f"auto, {cpu_count()} CPU"
+                if config.whisper.cpu_threads == "auto"
+                else "theo config"
+            )
+            print(
+                f"[transcribe] Whisper dùng {cpu_threads} thread CPU ({origin})",
+                file=sys.stderr,
+            )
         result = transcribe_audio(
             audio_path,
             transcript_path,
@@ -449,6 +472,7 @@ def _cmd_transcribe(args: argparse.Namespace, config: AppConfig) -> int:
             compute_type=config.whisper.compute_type,
             language=None if args.source_lang == "auto" else args.source_lang,
             force=args.force,
+            cpu_threads=cpu_threads,
         )
     except (AudioExtractionError, TranscriptionError) as exc:
         print(f"[transcribe] LỖI: {exc}", file=sys.stderr)
@@ -922,7 +946,8 @@ def _cmd_playlist(args: argparse.Namespace, config: AppConfig) -> int:
 
 
 def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
-    from app.config import validate_web_port
+    from app.config import validate_web_max_jobs, validate_web_port
+    from app.hardware import resolve_web_max_jobs
     from app.web.auth import PASSWORD_ENV, is_loopback
 
     host = args.host if args.host is not None else config.web.host
@@ -932,6 +957,12 @@ def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
     except ConfigError as exc:
         print(f"[config] LỖI: {exc}", file=sys.stderr)
         return 1
+    max_jobs_setting = args.max_jobs if args.max_jobs is not None else config.web.max_jobs
+    try:
+        validate_web_max_jobs(max_jobs_setting)
+    except ConfigError as exc:
+        print(f"[web] LỖI: {exc}", file=sys.stderr)
+        return 2
     workspace = Path(args.workspace) if args.workspace else config.workspace
 
     # Import fastapi/uvicorn chỉ ở đây: extra `web` là tùy chọn, các lệnh CLI
@@ -962,6 +993,14 @@ def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
             file=sys.stderr,
             flush=True,
         )
+    max_jobs, reason = resolve_web_max_jobs(
+        max_jobs_setting, whisper_device=config.whisper.device
+    )
+    print(
+        f"[web] Hàng đợi: tối đa {max_jobs} job song song ({reason})",
+        file=sys.stderr,
+        flush=True,
+    )
     run(
         host,
         port,
@@ -969,6 +1008,7 @@ def _cmd_web(args: argparse.Namespace, config: AppConfig) -> int:
         Path(args.config) if args.config else None,
         password,
         Path(config.translation.glossary) if config.translation.glossary else None,
+        max_jobs,
     )
     return 0
 
