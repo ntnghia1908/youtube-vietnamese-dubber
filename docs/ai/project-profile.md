@@ -78,7 +78,12 @@ HUMAN LEAD (chủ repo) giữ: scope, chọn checkpoint/hạng mục CP9, depend
 | Checkpoint / task S1–S2 (nhiều file + test + chạy thật) | `/spec N` → (ngoài boundary đã duyệt: HUMAN LEAD `APPROVE TASK`) → `/implement N` → `/clear` |
 | Fix bug nhỏ, sửa docs, trả lời câu hỏi | `single-agent`, làm trực tiếp |
 
-Một IMPLEMENTER mỗi checkpoint, không chạy song song — checkpoint sau ăn output của checkpoint trước (`governance.maxParallelImplementers = 1`).
+Tối đa **2** IMPLEMENTER song song (`governance.maxParallelImplementers = 2`, HUMAN LEAD 2026-10-17), chỉ khi thỏa mọi điều kiện "Bounded parallel IMPLEMENTER" ở `docs/ai/workflow.md` §5. Đặc thù project:
+
+- Mỗi implementer song song chạy trong git worktree riêng (`isolation: "worktree"`); ORCHESTRATOR merge/commit lần lượt từng task.
+- Chạy thật của hai task phải dùng **thư mục tập khác nhau** trong `output/` (artifact là state dùng chung, không có branch).
+- Hai task ghi cùng `docs/decisions/checkpoint-N.md` → task chạy sau ghi mục riêng, ORCHESTRATOR gộp khi merge.
+- Checkpoint sau ăn output (code/contract artifact) của checkpoint trước thì vẫn tuần tự. Máy chỉ có CPU: hai chạy thật nặng cùng lúc làm chậm cả hai.
 
 ### Governance mode
 

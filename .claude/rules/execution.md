@@ -24,7 +24,7 @@ Task `dual-agent`: ORCHESTRATOR chọn IMPLEMENTER theo Danh sách IMPLEMENTER �
 
 ## Session
 
-Bootstrap từ repository. Session mới không dùng transcript chat làm authority. Một agent mỗi checkpoint, không chạy song song.
+Bootstrap từ repository. Session mới không dùng transcript chat làm authority. Một agent mỗi checkpoint; tối đa 2 implementer song song theo `docs/ai/project-profile.md` §7 (mỗi cái một worktree, `isolation: "worktree"`).
 
 ## Kết thúc session
 

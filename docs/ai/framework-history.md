@@ -24,3 +24,8 @@ File này chỉ ghi lịch sử; rule hiện hành nằm ở canonical owner c�
 - Ngày: 2026-10-17 (sau adoption)
 - Thay đổi: `governance.taskAuthorization` `task` → `boundary`; boundary đầu tiên: ADR-001 (WEB-1..3). Task ngoài boundary vẫn cần APPROVE TASK (`docs/ai/project-profile.md` §7). Cập nhật `/spec`, `/implement`, `.claude/rules/execution.md` theo.
 - Lý do: HUMAN LEAD chọn "duyệt 1 lần" cho đợt Web UI (ADR-001 D6).
+
+- Ngày: 2026-10-17
+- Thay đổi: `governance.maxParallelImplementers` `1` → `2`; điều kiện đặc thù (worktree riêng, chạy thật khác thư mục tập, gộp decisions khi merge) ở `docs/ai/project-profile.md` §7; `.claude/rules/execution.md` theo.
+- Lý do: HUMAN LEAD muốn chạy song song các task CP9/WEB không giao owned paths (vd CP9-B cùng lúc CP9-A).
+- Decision: HUMAN LEAD, 2026-10-17 ("có thể đổi maxParallelImplementers = 2").

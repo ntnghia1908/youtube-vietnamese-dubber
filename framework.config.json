@@ -6,7 +6,7 @@
   },
   "governance": {
     "taskAuthorization": "boundary",
-    "maxParallelImplementers": 1
+    "maxParallelImplementers": 2
   },
   "requiredFiles": [
     "docs/IMPLEMENTATION_PLAN.md",
