@@ -11,12 +11,12 @@ Plan gốc ghi Web UI là "Future" (`docs/IMPLEMENTATION_PLAN.md` §5, §31). AD
 
 ## 0. Implementation Authorization Boundary
 
-HUMAN LEAD (2026-10-17) authorize ORCHESTRATOR tự lập và thực thi task contract cho **WEB-1, WEB-2, WEB-3** đúng như mục 4–6, không cần `APPROVE TASK` từng task. Boundary gồm:
+HUMAN LEAD (2026-10-17) authorize ORCHESTRATOR tự lập và thực thi task contract cho các phase WEB-1..2 ở mục 6 (ban đầu đánh số WEB-1..3, xem sửa đổi ở mục 6) đúng như mục 4–6, không cần `APPROVE TASK` từng task. Boundary gồm:
 
 - Path được sửa: `app/web/**` (mới), `app/cli.py` (subcommand `web`), `app/config.py` + `config.example.yaml` (section `web`), `pyproject.toml` (extra `web` với `fastapi`, `uvicorn`, `jinja2`, `httpx`), `tests/test_web_*.py`, `README.md`, `docs/`.
 - Thay đổi nhỏ trong `app/pipeline/` chỉ khi mục 7 đã nêu (dòng tiến độ máy đọc được, lock file) và ghi vào decision log của task.
 
-Ngoài boundary → dừng, hỏi HUMAN LEAD: WEB-4; bind ngoài `127.0.0.1` / auth (D1-B); dependency khác danh sách trên; đổi schema artifact pipeline (`translated.json`, `normalized.json`, `playlist.json`...). Commit/push vẫn chờ HUMAN LEAD (integration gate).
+Ngoài boundary → dừng, hỏi HUMAN LEAD: WEB-3; bind ngoài `127.0.0.1` / auth (D1-B); dependency khác danh sách trên; đổi schema artifact pipeline (`translated.json`, `normalized.json`, `playlist.json`...). Commit/push vẫn chờ HUMAN LEAD (integration gate).
 
 ## 1. Vấn đề
 
@@ -109,17 +109,18 @@ An toàn (cho phương án A): bind `127.0.0.1` mặc định; episode được 
 
 | Phase | Nội dung | Phụ thuộc | Giá trị ngay |
 |---|---|---|---|
-| **WEB-1** Thư viện + player (read-only) | subcommand `web`, quét workspace, trang Thư viện/Episode/Playlist, stream video có Range, bảng câu + tua | ADR ACCEPTED | dùng ngay cho việc đầu tiên của CP9: nghe EP1, soi 79 câu too_long |
-| **WEB-2** Jobs | hàng đợi 1 worker, subprocess CLI, SSE log + tiến độ stage, hủy, recovery khi restart | WEB-1 | chạy playlist từ trình duyệt, thấy lỗi đầy đủ |
-| **WEB-3** Glossary | editor + validate + "dịch lại & chạy tiếp" (job WEB-2) | WEB-2 | vòng sửa tên/xưng hô nhanh |
-| WEB-4 *(sau, cần ADR/quyết định riêng)* | sửa câu dịch từng segment → chỉ TTS lại câu đổi (cache TTS đã theo hash text) → normalize/render lại | WEB-3, CP9 | sửa tay câu too_long; **đổi contract `translated.json`** (cờ "đã sửa tay" để `translate --force` không ghi đè) → decision gate |
+| **WEB-1** Nhập URL + Jobs + Thư viện + player | subcommand `web`; form nhập URL video/playlist → hàng đợi 1 worker, subprocess CLI, log trực tiếp (SSE) + tiến độ stage, hủy, chạy lại, recovery khi restart; quét workspace, trang Thư viện/Episode/Playlist, stream video có Range, bảng câu + tua | ADR ACCEPTED | dùng web làm nguồn vào ngay từ đầu, không cần copy dữ liệu; nghe output + soi câu too_long cho CP9 |
+| **WEB-2** Glossary | editor + validate + "dịch lại & chạy tiếp" (job WEB-1) | WEB-1 | vòng sửa tên/xưng hô nhanh |
+| WEB-3 *(sau, cần ADR/quyết định riêng)* | sửa câu dịch từng segment → chỉ TTS lại câu đổi (cache TTS đã theo hash text) → normalize/render lại | WEB-2, CP9 | sửa tay câu too_long; **đổi contract `translated.json`** (cờ "đã sửa tay" để `translate --force` không ghi đè) → decision gate |
 
-Required verification mỗi phase (theo profile §4 luật 1 + Test policy): unittest với `TestClient` (mock subprocess) **và** chạy thật: bật `python -m app web`, dùng workspace có EP1 thật; `curl -r 0-1023` lên `/media/...` phải trả `206`; mở trình duyệt xem/tua được video; WEB-2: submit một video ngắn thật, thấy log trực tiếp, hủy giữa chừng rồi chạy lại phải SKIP stage đã xong.
+Required verification mỗi phase (theo profile §4 luật 1 + Test policy): unittest với `TestClient` (mock subprocess) **và** chạy thật: bật `python -m app web`, submit một video ngắn thật qua form, thấy log trực tiếp, hủy giữa chừng rồi chạy lại phải SKIP stage đã xong; `curl -r 0-1023` lên `/media/...` phải trả `206`.
+
+> Sửa đổi 2026-10-17 (HUMAN LEAD): gộp WEB-1 cũ (thư viện/player) và WEB-2 cũ (jobs, nhập URL) thành WEB-1 — web là nơi nhập nguồn YouTube ngay từ phase đầu; glossary thành WEB-2. Boundary mục 0 áp dụng cho WEB-1..2 (nội dung không đổi, chỉ đổi thứ tự).
 
 ## 7. Rủi ro
 
-- Parse log để lấy tiến độ dễ gãy khi đổi câu log → đặt tiến độ dạng dòng máy đọc được (vd `@@progress {"stage":..}`) là thay đổi nhỏ trong `run_dub`; quyết khi spec WEB-2.
-- Chạy job web song song với lệnh CLI chạy tay trên cùng episode → hai writer. Giảm thiểu: lock file `<episode>/.lock` (cần thay đổi nhỏ ở pipeline — quyết ở WEB-2) hoặc chỉ cảnh báo.
+- Parse log để lấy tiến độ dễ gãy khi đổi câu log → đặt tiến độ dạng dòng máy đọc được (vd `@@progress {"stage":..}`) là thay đổi nhỏ trong `run_dub`; quyết khi spec WEB-1.
+- Chạy job web song song với lệnh CLI chạy tay trên cùng episode → hai writer. Giảm thiểu: lock file `<episode>/.lock` (cần thay đổi nhỏ ở pipeline — quyết ở WEB-1) hoặc chỉ cảnh báo.
 - Tốn thời gian làm UI đẩy lùi CP9 (chất lượng mới là nút thắt thật). Giảm thiểu: dừng sau WEB-1 nếu thấy đủ dùng.
 - Máy dev vừa chuyển sang Linux, `.venv` chưa dựng lại → làm trước WEB-1.
 
@@ -130,8 +131,8 @@ Required verification mỗi phase (theo profile §4 luật 1 + Test policy): uni
 | D1 | Mô hình triển khai | A — local, `127.0.0.1`; LAN (B) để sau, quyết riêng |
 | D2 | Stack + dependency mới `fastapi`, `uvicorn`, `jinja2` (+ `httpx` cho test) dưới extra `web` | đồng ý |
 | D3 | Chạy job bằng subprocess CLI, 1 worker | đồng ý |
-| D4 | Phạm vi đợt này | WEB-1 → WEB-3; WEB-4 ADR riêng |
-| D5 | Thứ tự so với CP9 | WEB-1 trước (hỗ trợ đánh giá output CP9), rồi CP9 hạng mục 1; WEB-2/3 xen sau |
+| D4 | Phạm vi đợt này | WEB-1 → WEB-2 (sau gộp); WEB-3 ADR riêng |
+| D5 | Thứ tự so với CP9 | WEB-1 trước (hỗ trợ đánh giá output CP9), rồi CP9 hạng mục 1; WEB-2 xen sau |
 | D6 | Governance cho đợt Web | giữ `task` (APPROVE TASK từng phase); hoặc chuyển `boundary` cho WEB-1..3 nếu muốn ít bước duyệt |
 
 Trả lời của HUMAN LEAD (2026-10-17): D1–D5 theo cột khuyến nghị; D6 = `boundary` (mục 0).

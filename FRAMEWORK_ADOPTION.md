@@ -33,7 +33,7 @@ Thay đổi framework sau adoption ghi ở `docs/ai/framework-history.md`.
 
 ## Adoption boundary
 
-Adoption chỉ đổi tài liệu và cấu hình agent; không đổi code `app/` hay `tests/`. Không authorize implement CP9. Web UI WEB-1..3 được authorize riêng bởi ADR-001 (ACCEPTED 2026-10-17), không phải bởi adoption.
+Adoption chỉ đổi tài liệu và cấu hình agent; không đổi code `app/` hay `tests/`. Không authorize implement CP9. Web UI WEB-1..2 được authorize riêng bởi ADR-001 (ACCEPTED 2026-10-17), không phải bởi adoption.
 
 ## Verification status
 

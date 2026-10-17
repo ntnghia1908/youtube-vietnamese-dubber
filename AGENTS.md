@@ -42,4 +42,4 @@ Không preload toàn bộ tài liệu. Session mới bootstrap từ repository, 
 ## Project boundary
 
 - Implemented: CLI Python chạy local, pipeline download → transcribe → translate → tts → normalize → render, lệnh `dub` (CP7) và `playlist` (CP8).
-- Planned, chưa có code: Web UI local WEB-1..3 (`docs/adr/ADR-001-web-ui.md`, ACCEPTED, boundary-authorized) và Checkpoint 9 (quality improvements, cần APPROVE TASK).
+- Planned, chưa có code: Web UI local WEB-1..2 (`docs/adr/ADR-001-web-ui.md`, ACCEPTED, boundary-authorized) và Checkpoint 9 (quality improvements, cần APPROVE TASK).

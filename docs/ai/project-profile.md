@@ -3,7 +3,7 @@
 | Metadata | Value |
 |---|---|
 | Status | CURRENT |
-| Project stage | MVP CLI xong tới CP8; đang làm Web UI local (ADR-001 ACCEPTED, WEB-1..3), sau đó CP9 (quality) |
+| Project stage | MVP CLI xong tới CP8; đang làm Web UI local (ADR-001 ACCEPTED, WEB-1..2), sau đó CP9 (quality) |
 
 Canonical owner cho: project là gì, authority order, module map, project policy (gồm luật bắt buộc), integration mechanism, execution profile được phép, setup và Test policy.
 
@@ -39,7 +39,7 @@ Lịch sử, không phải authority hiện hành: `docs/specs/cp-*.md` (spec c�
 | `app/synchronization/` | đo/co giãn timing, `normalized.json` | implemented (CP5) | |
 | `app/audio/` | voice track, mix, render `output_vi.mp4` | implemented (CP6) | |
 | `app/pipeline/` | `run_dub` (CP7), `run_playlist` + `playlist.json` (CP8) | implemented | contract: `docs/decisions/checkpoint-8.md` mục A |
-| `app/web/` | Web UI local (FastAPI + Jinja2) | **planned** — WEB-1..3 theo ADR-001 | `docs/adr/ADR-001-web-ui.md` |
+| `app/web/` | Web UI local (FastAPI + Jinja2) | **planned** — WEB-1..2 theo ADR-001 | `docs/adr/ADR-001-web-ui.md` |
 | `tests/` | unittest, mock mọi tiến trình/dịch vụ ngoài | implemented | §4 luật 1 |
 
 ## 4. Project policy
@@ -86,7 +86,7 @@ Một IMPLEMENTER mỗi checkpoint, không chạy song song — checkpoint sau �
 
 | Boundary đã duyệt | Phạm vi | Authorization source ghi trong task |
 |---|---|---|
-| ADR-001 mục 0 | WEB-1, WEB-2, WEB-3 | `ADR-001 boundary (HUMAN LEAD 2026-10-17)` |
+| ADR-001 mục 0 | WEB-1, WEB-2 (ADR-001 mục 6) | `ADR-001 boundary (HUMAN LEAD 2026-10-17)` |
 
 Task **không** nằm trong boundary nào ở bảng trên (CP9, `fix(...)`...) vẫn cần HUMAN LEAD duyệt riêng: contract để `Implementation authorized: NO` cho tới khi HUMAN LEAD gõ `APPROVE TASK`, rồi ghi `Authorization source: APPROVE TASK <ngày>`. ORCHESTRATOR không tự mở rộng boundary.
 
