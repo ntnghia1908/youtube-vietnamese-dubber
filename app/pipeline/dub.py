@@ -238,7 +238,9 @@ def run_dub(
     except TranslationError as exc:  # GlossaryError là TranslationError
         raise DubError("translate", str(exc)) from exc
 
-    if not (episode_dir / GLOSSARY_FILENAME).exists():
+    # Chỉ nhắc khi không tầng nào có glossary: tập trong playlist đã có
+    # glossary playlist (CP9-A) hoặc glossary dùng chung thì lời nhắc là nhiễu.
+    if not glossary_paths and not (episode_dir / GLOSSARY_FILENAME).exists():
         log(
             f'[dub] Chưa có glossary.yaml — nên chạy: python -m app glossary "{episode_dir}", '
             "sửa file, rồi chạy lại dub."

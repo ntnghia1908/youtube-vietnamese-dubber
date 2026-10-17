@@ -304,6 +304,18 @@ class TestGlossary(DubPipelineTestCase):
         self.assertTrue(any("[dub] glossary : " in line for line in self.log_lines))
         self.assertFalse(any("python -m app glossary" in line for line in self.log_lines))
 
+    def test_playlist_glossary_only_does_not_log_reminder(self) -> None:
+        # Tập chỉ có glossary playlist (CP9-A), không có <tập>/glossary.yaml.
+        playlist_glossary = self.episode_dir.parent / "glossary.yaml"
+        self._patch_all(
+            load_effective_glossary=MagicMock(return_value=(object(), [playlist_glossary]))
+        )
+        self._run()
+
+        self.assertFalse((self.episode_dir / "glossary.yaml").exists())
+        self.assertTrue(any("[dub] glossary : " in line for line in self.log_lines))
+        self.assertFalse(any("python -m app glossary" in line for line in self.log_lines))
+
     def test_glossary_error_becomes_dub_error_on_translate_stage(self) -> None:
         mocks = self._patch_all(
             load_effective_glossary=MagicMock(

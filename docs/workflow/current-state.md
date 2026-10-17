@@ -26,8 +26,6 @@ PROPOSED, không authorize implementation. Thứ tự CP9 HUMAN LEAD chọn 2026
 
 Nợ riêng, làm bằng `fix(...)` (S1), không phải checkpoint:
 
-- `fix(dub)`: log vẫn gợi ý "Chưa có glossary.yaml — nên chạy glossary…" khi tập chỉ có glossary playlist (CP9-A).
-
 - `fix(tts)`: edge-tts từng lỗi vĩnh viễn ~20–25% câu trên tập 353 câu (chạy lại thì 0%) — nghi rate-limit; cần backoff/hạ `tts.concurrency`. Xem `docs/decisions/checkpoint-8.md` F1.
 - Mục `[CẦN DUYỆT]` còn mở của CP7: C0 (Whisper chia segment khác giữa hai lần chạy), C1 (`tts/manifest.json` bị ghi lại dù không đổi).
 - Summary `playlist` chỉ in dòng đầu của lỗi → không thấy lý do thật (vd "Private video").
